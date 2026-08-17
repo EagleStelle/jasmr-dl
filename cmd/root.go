@@ -17,7 +17,7 @@ var (
 	concurrency int
 	retries     int
 	userAgent   string
-	combined    bool
+	mode        int
 	verbose     bool
 )
 
@@ -26,9 +26,10 @@ var rootCmd = &cobra.Command{
 	Short: "Download audio albums from japaneseasmr.com",
 	Long: "jasmr-dl downloads every track on a japaneseasmr.com album page,\n" +
 		"concurrently, with resume and retry.",
-	Example: "  jasmr-dl https://japaneseasmr.com/12345/\n" +
-		"  jasmr-dl https://japaneseasmr.com/12345/ -o ./out -c 4\n" +
-		"  jasmr-dl https://japaneseasmr.com/12345/ --combined",
+	Example: "  jasmr-dl https://japaneseasmr.com/12345/          # combined file\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ -m 1     # split tracks\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ -m 2     # both\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ -o ./out -c 4",
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
@@ -50,10 +51,10 @@ func Execute() {
 
 func init() {
 	f := rootCmd.PersistentFlags()
-	f.StringVarP(&outputDir, "output", "o", "", "download directory (default ./<Album Title>)")
+	f.StringVarP(&outputDir, "output", "o", "", "download directory (default: the album title)")
+	f.IntVarP(&mode, "mode", "m", 0, "what to download: 0 combined, 1 split tracks, 2 both")
 	f.IntVarP(&concurrency, "concurrency", "c", 3, "simultaneous downloads")
-	f.IntVar(&retries, "retries", 4, "per-file retry attempts")
-	f.StringVar(&userAgent, "user-agent", defaultUserAgent, "User-Agent sent with every request")
-	f.BoolVar(&combined, "combined", false, "also download the combined whole-work file")
+	f.IntVarP(&retries, "retries", "r", 4, "per-file retry attempts")
+	f.StringVarP(&userAgent, "user-agent", "u", defaultUserAgent, "User-Agent sent with every request")
 	f.BoolVarP(&verbose, "verbose", "v", false, "debug logging")
 }

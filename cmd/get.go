@@ -28,6 +28,10 @@ func runGet(cmd *cobra.Command, args []string) error {
 	if retries < 0 {
 		return fmt.Errorf("--retries cannot be negative, got %d", retries)
 	}
+	m := scraper.Mode(mode)
+	if !m.Valid() {
+		return fmt.Errorf("--mode must be 0 (combined), 1 (split) or 2 (both), got %d", mode)
+	}
 
 	// One Ctrl+C cancels every in-flight request cleanly.
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
@@ -44,11 +48,20 @@ func runGet(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	printAlbum(cmd, album)
+	tracks := album.Select(m)
 
-	tracks := album.Downloadable(combined)
+	// Not every listing carries a whole-work file. Falling back beats
+	// exiting with nothing when the default mode finds none.
+	if len(tracks) == 0 && m == scraper.ModeCombined {
+		cmd.PrintErrln("no combined file in this listing; downloading the split tracks instead")
+		m = scraper.ModeSplit
+		tracks = album.Select(m)
+	}
+
+	printAlbum(cmd, album, tracks, m)
+
 	if len(tracks) == 0 {
-		return fmt.Errorf("nothing to download")
+		return fmt.Errorf("nothing to download in mode %d (%s)", mode, m)
 	}
 
 	dir := outputDirFor(album.Title)
@@ -122,26 +135,23 @@ func humanSize(n int64) string {
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGT"[exp])
 }
 
-func printAlbum(cmd *cobra.Command, a *scraper.Album) {
+func printAlbum(cmd *cobra.Command, a *scraper.Album, tracks []scraper.Track, m scraper.Mode) {
 	cmd.Printf("\ntitle:  %s\n", a.Title)
 	cmd.Printf("rj:     %s\n", a.RJCode)
 	cmd.Printf("cover:  %s\n", orNone(a.CoverURL))
 	cmd.Printf("output: %s\n", outputDirFor(a.Title))
+	cmd.Printf("mode:   %d (%s)\n", m, m)
 
-	tracks := a.Downloadable(combined)
-	cmd.Printf("\ntracks: %d of %d listed\n", len(tracks), len(a.Tracks))
+	cmd.Printf("\nselected %d of %d listed file(s)\n", len(tracks), len(a.Tracks))
 	for _, t := range tracks {
 		label := fmt.Sprintf("%02d", t.Index)
 		if t.Combined {
-			label = "--"
+			label = "──"
 		}
 		cmd.Printf("  [%s] %s\n", label, t.Title)
 		if verbose {
 			cmd.Printf("       %s\n", t.LinkURL)
 		}
-	}
-	if !combined {
-		cmd.Printf("\n(combined whole-work file skipped; pass --combined to include it)\n")
 	}
 }
 
