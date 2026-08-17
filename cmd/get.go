@@ -56,7 +56,77 @@ func runGet(cmd *cobra.Command, args []string) error {
 	}
 
 	printAlbum(cmd, album)
-	return fmt.Errorf("downloader not implemented yet (phase 3)")
+
+	tracks := album.Downloadable(combined)
+	if len(tracks) == 0 {
+		return fmt.Errorf("nothing to download")
+	}
+
+	dir := outputDirFor(album.Title)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create output directory: %w", err)
+	}
+
+	jobs := make([]downloader.Job, 0, len(tracks))
+	for _, t := range tracks {
+		jobs = append(jobs, downloader.Job{Name: t.Title, LinkURL: t.LinkURL})
+	}
+
+	d := &downloader.Downloader{
+		Client:    downloader.NewClient(),
+		UserAgent: userAgent,
+		OutputDir: dir,
+		Retries:   retries,
+		OnStart: func(name string, total int64) {
+			cmd.Printf("  ↓ %s (%s)\n", name, humanSize(total))
+		},
+	}
+
+	cmd.Printf("\ndownloading %d file(s) into %s with concurrency %d\n\n", len(jobs), dir, concurrency)
+	results := d.Run(ctx, jobs, concurrency)
+
+	return report(cmd, results)
+}
+
+// report prints a per-file summary and fails only if every file failed.
+func report(cmd *cobra.Command, results []downloader.Result) error {
+	var failed int
+	cmd.Println()
+	for _, r := range results {
+		if r.Err != nil {
+			failed++
+			cmd.PrintErrf("  ✗ %s: %v\n", r.Job.Name, r.Err)
+			continue
+		}
+		cmd.Printf("  ✓ %s\n", filepath.Base(r.Path))
+	}
+
+	switch {
+	case failed == 0:
+		cmd.Printf("\ndone: %d file(s)\n", len(results))
+		return nil
+	case failed == len(results):
+		return fmt.Errorf("all %d download(s) failed", failed)
+	default:
+		cmd.Printf("\ndone: %d ok, %d failed\n", len(results)-failed, failed)
+		return nil
+	}
+}
+
+func humanSize(n int64) string {
+	if n < 0 {
+		return "unknown size"
+	}
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGT"[exp])
 }
 
 func printAlbum(cmd *cobra.Command, a *scraper.Album) {
