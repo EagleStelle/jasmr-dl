@@ -69,6 +69,6 @@ func (d *Downloader) probe(ctx context.Context, target, referer string) error {
 	case http.StatusOK, http.StatusPartialContent:
 		return nil
 	default:
-		return badStatus(target, resp)
+		return util.BadStatus(target, resp)
 	}
 }

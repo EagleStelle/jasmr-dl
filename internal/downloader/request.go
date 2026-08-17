@@ -2,8 +2,9 @@ package downloader
 
 import (
 	"context"
-	"fmt"
 	"net/http"
+
+	"jasmr-dl/internal/util"
 )
 
 // newMediaRequest builds the GET every media fetch starts from: a player's
@@ -46,13 +47,7 @@ func (d *Downloader) getOK(ctx context.Context, target, referer string) (*http.R
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, badStatus(target, resp)
+		return nil, util.BadStatus(target, resp)
 	}
 	return resp, nil
-}
-
-// badStatus names the URL alongside the status, the pair needed to tell which
-// of a job's several hops refused.
-func badStatus(target string, resp *http.Response) error {
-	return fmt.Errorf("GET %s: %s", target, resp.Status)
 }
