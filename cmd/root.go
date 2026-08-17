@@ -10,6 +10,7 @@ import (
 var (
 	outputDir   string
 	concurrency int
+	connections int
 	retries     int
 	cookieFile  string
 	noCover     bool
@@ -47,7 +48,8 @@ func init() {
 	f := rootCmd.PersistentFlags()
 	f.StringVarP(&outputDir, "output", "o", "", "download directory (default: the album title)")
 	f.IntVarP(&concurrency, "concurrency", "N", 3, "files to download at once")
-	f.IntVarP(&retries, "retries", "R", 4, "per-file retry attempts")
+	f.IntVarP(&connections, "connections", "j", 32, "ranged requests in flight, which is what sets speed (max 128)")
+	f.IntVarP(&retries, "retries", "R", 4, "retry attempts per ranged request")
 	f.StringVarP(&cookieFile, "cookies", "c", "", "path to a cookies.txt export, saved for later runs")
 	f.BoolVarP(&noCover, "no-cover", "C", false, "do not embed cover art")
 	f.BoolVarP(&noChapters, "no-chapters", "H", false, "do not embed the track list as chapters")

@@ -1,8 +1,11 @@
 package downloader
 
 import (
+	"fmt"
 	"io"
+	"math"
 	"sync"
+	"time"
 
 	"github.com/mattn/go-runewidth"
 	"github.com/vbauerster/mpb/v8"
@@ -11,14 +14,22 @@ import (
 
 // nameCols bounds the label column in terminal columns rather than runes.
 // Japanese titles are double-width, so a rune budget would still wrap the line.
-const nameCols = 28
+// With the columns beside it, a line fits an 80-column terminal.
+const nameCols = 24
+
+// sizeCols holds the byte counters, so every line's ETA starts in the same
+// column. "999.9 MiB / 999.9 MiB" is 21 columns.
+const sizeCols = 21
+
+// etaCols fits "ETA 12:34:56", the longest form printed.
+const etaCols = 12
 
 // progressTag prefixes every progress line, matching [info] and [done].
 const progressTag = "[progress] "
 
-// Progress renders one live line per file: percentage, bytes done over bytes
-// total, and speed. Its Start and Update methods satisfy Downloader.OnStart
-// and Downloader.OnProgress.
+// Progress renders one live line per file: percentage, bytes on disk over the
+// bytes expected, and the time left. Its Start and Update methods satisfy
+// Downloader.OnStart and Downloader.OnProgress.
 //
 // Safe for concurrent use: every worker reports into the same set.
 type Progress struct {
@@ -41,17 +52,9 @@ func NewProgress(w io.Writer) *Progress {
 }
 
 // Start creates the line for name. A retry re-reports the same name, so an
-// existing line is reused rather than duplicated.
+// existing line is reused rather than duplicated. A non-positive total means
+// the size is not known yet; Update adopts the real one when it arrives.
 func (b *Progress) Start(name string, total int64) {
-	b.start(name, total, decor.CountersKibiByte("% .1f / % .1f"))
-}
-
-// StartCount counts segments, for HLS jobs with no known byte total.
-func (b *Progress) StartCount(name string, total int64) {
-	b.start(name, total, decor.CountersNoUnit("%d / %d segments"))
-}
-
-func (b *Progress) start(name string, total int64, counters decor.Decorator) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -70,7 +73,9 @@ func (b *Progress) start(name string, total int64, counters decor.Decorator) {
 			decor.Name(" "), // the name column clips flush, so separate it here
 			decor.Percentage(decor.WC{W: 5}),
 			decor.Name("  "),
-			counters,
+			decor.CountersKibiByte("% .1f / % .1f", decor.WC{W: sizeCols, C: decor.DindentRight}),
+			decor.Name(" "),
+			eta(),
 		),
 	)
 }
@@ -107,6 +112,94 @@ func (b *Progress) Wait() {
 	}
 	b.mu.Unlock()
 	b.p.Wait()
+}
+
+const (
+	// rateWindow is how far back the speed behind the ETA looks.
+	rateWindow = 5 * time.Second
+
+	// maxETA caps what is worth printing; past it the figure is noise.
+	maxETA = 24 * time.Hour
+
+	// etaUnknown stands in until a rate and a total both exist.
+	etaUnknown = "ETA --:--"
+)
+
+// eta renders the time left. Each redraw is one reading for the meter kept
+// here; redraws run on the line's own goroutine, so it needs no lock.
+func eta() decor.Decorator {
+	var m rateMeter
+	return decor.Any(func(s decor.Statistics) string {
+		rate := m.observe(time.Now(), s.Current)
+		if s.Completed || s.Aborted {
+			return ""
+		}
+
+		remaining := s.Total - s.Current
+		if s.Total <= 0 || remaining <= 0 || rate <= 0 {
+			return etaUnknown
+		}
+		left := float64(remaining) / rate
+		if left > maxETA.Seconds() {
+			return etaUnknown
+		}
+		return "ETA " + formatETA(time.Duration(left*float64(time.Second)))
+	}, decor.WC{W: etaCols, C: decor.DindentRight})
+}
+
+// rateMeter turns absolute progress readings into bytes per second. Samples
+// decay over rateWindow, so a burst or a stall moves the figure without
+// throwing it; dividing by the weight they carry keeps the first seconds from
+// reading as a fraction of the real speed.
+type rateMeter struct {
+	sum    float64 // decayed sum of the samples
+	weight float64 // decayed weight those samples carry
+	last   time.Time
+	prev   int64
+	seen   bool
+}
+
+// observe folds one reading into the rate and returns bytes per second.
+func (m *rateMeter) observe(now time.Time, current int64) float64 {
+	if !m.seen {
+		m.seen, m.last, m.prev = true, now, current
+		return 0
+	}
+
+	dt := now.Sub(m.last).Seconds()
+	if dt <= 0 {
+		return m.rate()
+	}
+
+	delta := current - m.prev
+	if delta < 0 {
+		delta = 0 // a re-estimated total can walk a line backwards
+	}
+	m.last, m.prev = now, current
+
+	decay := math.Exp(-dt / rateWindow.Seconds())
+	m.sum = decay*m.sum + (1-decay)*(float64(delta)/dt)
+	m.weight = decay*m.weight + (1 - decay)
+	return m.rate()
+}
+
+func (m *rateMeter) rate() float64 {
+	if m.weight <= 0 {
+		return 0
+	}
+	return m.sum / m.weight
+}
+
+// formatETA prints h:mm:ss past an hour and mm:ss below it.
+func formatETA(d time.Duration) string {
+	d = d.Round(time.Second)
+	h := int64(d / time.Hour)
+	m := int64(d/time.Minute) % 60
+	s := int64(d/time.Second) % 60
+	if h > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
+	}
+	return fmt.Sprintf("%02d:%02d", m, s)
 }
 
 // truncate clips s to at most cols terminal columns, cutting whole runes.

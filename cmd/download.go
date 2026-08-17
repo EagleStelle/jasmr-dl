@@ -20,6 +20,11 @@ import (
 const (
 	targetHost     = "japaneseasmr.com"
 	cookieFileName = "cookies.txt"
+
+	genre = "ASMR"
+
+	// partSeparator joins a work to the part one file holds.
+	partSeparator = " - "
 )
 
 func runDownload(cmd *cobra.Command, args []string) error {
@@ -29,6 +34,9 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	}
 	if concurrency < 1 {
 		return fmt.Errorf("--concurrency must be at least 1, got %d", concurrency)
+	}
+	if connections < 1 {
+		return fmt.Errorf("--connections must be at least 1, got %d", connections)
 	}
 	if retries < 0 {
 		return fmt.Errorf("--retries cannot be negative, got %d", retries)
@@ -67,6 +75,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 
 	cmd.Printf("[info] %s to download\n", plural(len(album.Tracks), "file"))
 	debugf(cmd, "cover: %s", orNone(album.CoverURL))
+	debugf(cmd, "album: %s, circle: %s, date: %s", orNone(album.RJCode), orNone(album.Circle), orNone(album.Date))
 	debugf(cmd, "chapters: %d", len(album.Chapters))
 	for _, t := range album.Tracks {
 		debugf(cmd, "%s: %s", t.Title, t.LinkURL)
@@ -86,6 +95,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 			Source:     t.Source,
 			Alternates: t.Alternates,
 			Referer:    album.PageURL,
+			Tags:       tagsFor(album, t),
 		})
 	}
 
@@ -94,17 +104,16 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		Client:       client,
 		UserAgent:    userAgent,
 		OutputDir:    dir,
+		Connections:  connections,
 		Retries:      retries,
 		CoverPath:    fetchCover(ctx, cmd, client, album, dir),
 		Chapters:     chaptersFor(cmd, album),
-		Tags:         tagsFor(album),
 		OnCoverError: func(name string, err error) { cmd.PrintErrf("[warn] %s: %v\n", name, err) },
 		OnStart:      prog.Start,
 		OnProgress:   prog.Update,
-		OnStartCount: prog.StartCount,
 	}
 
-	debugf(cmd, "%d files at once, %d retries per file", concurrency, retries)
+	debugf(cmd, "%d files at once, %d requests in flight, %d retries each", concurrency, connections, retries)
 	results := d.Run(ctx, jobs, concurrency)
 
 	// Drain the renderer first, or it fights the summary for the same lines.
@@ -192,17 +201,28 @@ func sameFile(a, b string) bool {
 	return os.SameFile(ai, bi)
 }
 
-// tagsFor builds the metadata written into every file.
-func tagsFor(album *scraper.Album) downloader.Tags {
+// tagsFor builds the metadata written into one file.
+func tagsFor(album *scraper.Album, track scraper.Track) downloader.Tags {
 	if noTags {
 		return downloader.Tags{}
 	}
 	return downloader.Tags{
-		Title:   album.Title,
-		Artist:  album.Artists,
-		Album:   album.Title,
-		Comment: album.PageURL,
+		Title:       titleFor(album, track),
+		Artist:      album.Artists,
+		AlbumArtist: album.Circle,
+		Album:       album.RJCode,
+		Date:        album.Date,
+		Genre:       genre,
+		Comment:     album.PageURL,
 	}
+}
+
+// titleFor names one file, so a split post does not tag every part alike.
+func titleFor(album *scraper.Album, track scraper.Track) string {
+	if len(album.Tracks) < 2 || track.Name == "" {
+		return album.Title
+	}
+	return album.Title + partSeparator + track.Name
 }
 
 // chaptersFor returns chapters only when one file holds the whole work.

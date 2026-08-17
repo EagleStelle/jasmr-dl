@@ -118,6 +118,45 @@ func TestParsePlaylistCapsSegmentCount(t *testing.T) {
 	}
 }
 
+// The line reports bytes, so a playlist that names no total needs one
+// projected from the segments already written.
+func TestSegmentSizesProjectsTotal(t *testing.T) {
+	s := &segmentSizes{count: 10}
+
+	if done, total := s.stat(); done != 0 || total != 0 {
+		t.Fatalf("stat() = %d, %d before any segment, want 0, 0", done, total)
+	}
+
+	// Two of ten segments, 100 bytes each: a 1000-byte work.
+	for range 2 {
+		s.advance(100)
+		s.finish(100)
+	}
+	if done, total := s.stat(); done != 200 || total != 1000 {
+		t.Fatalf("stat() = %d, %d, want 200, 1000", done, total)
+	}
+
+	// A third segment part-way in counts on disk but not toward the mean.
+	s.advance(40)
+	if done, total := s.stat(); done != 240 || total != 1000 {
+		t.Fatalf("stat() = %d, %d mid-segment, want 240, 1000", done, total)
+	}
+}
+
+// Segments running longer than the mean must not project a total under what is
+// already written, which would read as over 100%.
+func TestSegmentSizesTotalNeverTrailsDisk(t *testing.T) {
+	s := &segmentSizes{count: 2}
+	s.advance(100)
+	s.finish(100)
+	s.advance(5000) // still in flight, and far longer than the first
+
+	done, total := s.stat()
+	if total < done {
+		t.Fatalf("stat() = %d, %d: total trails the bytes on disk", done, total)
+	}
+}
+
 func TestFirstVariant(t *testing.T) {
 	master := strings.Join([]string{
 		"#EXTM3U",

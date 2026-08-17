@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -40,6 +41,9 @@ func (s *Scraper) Album(ctx context.Context, pageURL string) (*Album, error) {
 		Title:    extractTitle(doc),
 		CoverURL: extractCover(doc, base),
 		Artists:  extractArtists(doc),
+		Circle:   extractCircle(doc),
+		RJCode:   extractRJCode(doc),
+		Date:     extractDate(doc),
 		Tracks:   directTracks(doc, base),
 		Chapters: extractChapters(doc),
 	}
@@ -117,14 +121,48 @@ func extractCover(doc *goquery.Document, base *url.URL) string {
 	return ""
 }
 
-// extractArtists reads the voice actor line, dropping its "CV:" label.
+var (
+	cvLine = regexp.MustCompile(`^CV\s*[:：]`)
+	rjLine = regexp.MustCompile(`^RJ\s*Code\s*[:：]`)
+	rjCode = regexp.MustCompile(`^RJ\d+$`)
+)
+
+// extractArtists reads the voice actor line. Posts predating the id carry the
+// same line unmarked.
 func extractArtists(doc *goquery.Document) string {
-	v := strings.TrimSpace(doc.Find("#voice_actors").First().Text())
-	if v == "" {
+	if v := strings.TrimSpace(doc.Find("#voice_actors").First().Text()); v != "" {
+		return afterLabel(v)
+	}
+	return labelled(doc, cvLine)
+}
+
+// extractRJCode reads the DLsite code, the one id every file of a post shares.
+func extractRJCode(doc *goquery.Document) string {
+	code := labelled(doc, rjLine)
+	if !rjCode.MatchString(code) {
 		return ""
 	}
-	if _, rest, ok := strings.Cut(v, ":"); ok {
-		v = strings.TrimSpace(rest)
+	return code
+}
+
+// labelled returns the value of the first post line carrying label.
+func labelled(doc *goquery.Document, label *regexp.Regexp) string {
+	var v string
+	doc.Find(".entry-content p").EachWithBreak(func(_ int, p *goquery.Selection) bool {
+		if t := strings.TrimSpace(p.Text()); label.MatchString(t) {
+			v = t
+			return false
+		}
+		return true
+	})
+	return afterLabel(v)
+}
+
+func afterLabel(v string) string {
+	for _, sep := range []string{":", "："} {
+		if _, rest, ok := strings.Cut(v, sep); ok {
+			return strings.TrimSpace(rest)
+		}
 	}
-	return v
+	return strings.TrimSpace(v)
 }
