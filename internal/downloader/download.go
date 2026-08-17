@@ -14,14 +14,22 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sync/semaphore"
+
+	"jasmr-dl/internal/scraper"
 	"jasmr-dl/internal/util"
 )
 
-// Job is one file to fetch. LinkURL is an unresolved dlc.php link; Name is the
-// listing's label, used only if the server declines to name the file.
+// Job is one file to fetch. Name is used only if the server declines to name it.
 type Job struct {
 	Name    string
 	LinkURL string
+
+	Source     scraper.Source
+	Alternates []string
+
+	// The media host answers 403 without it.
+	Referer string
 }
 
 // ProgressFunc reports transfer progress. total is -1 when unknown.
@@ -29,12 +37,34 @@ type ProgressFunc func(name string, done, total int64)
 
 // Downloader fetches jobs into OutputDir.
 type Downloader struct {
-	Client     *http.Client
-	UserAgent  string
-	OutputDir  string
-	Retries    int
+	Client    *http.Client
+	UserAgent string
+	OutputDir string
+	Retries   int
+
+	// FFmpeg is the binary; empty means look on PATH.
+	FFmpeg string
+
+	CoverPath string
+
+	// Chapters only mean anything when one file holds the whole work.
+	Chapters []scraper.Chapter
+
+	Tags Tags
+
+	// Files at once. Run derives chunks from it.
+	Concurrency int
+	chunks      int
+	budget      *semaphore.Weighted
+
 	OnStart    func(name string, total int64)
 	OnProgress ProgressFunc
+
+	// OnCoverError reports art that could not be attached; the audio is fine.
+	OnCoverError func(name string, err error)
+
+	// OnStartCount counts segments; an HLS byte total needs a request each.
+	OnStartCount func(name string, total int64)
 }
 
 // Download fetches one job, resuming a partial file if one is present. It
@@ -67,30 +97,49 @@ func (d *Downloader) Download(ctx context.Context, job Job) (string, error) {
 	return "", fmt.Errorf("after %d attempts: %w", d.Retries+1, lastErr)
 }
 
-// attempt runs the full resolve-and-transfer cycle once. Resolution happens
-// inside the retry loop on purpose: the signed URL is short-lived, so a retry
-// after a long backoff needs a fresh one rather than a stale cached URL.
+// attempt runs one resolve-and-transfer cycle.
 func (d *Downloader) attempt(ctx context.Context, job Job) (string, error) {
-	res, err := Resolve(ctx, d.Client, d.UserAgent, job.LinkURL)
+	// A playlist has no single file behind it.
+	if job.Source == scraper.SourceHLS {
+		return d.assembleHLS(ctx, job)
+	}
+
+	res, err := d.pickEncoding(ctx, job)
 	if err != nil {
 		return "", err
 	}
+
+	if err := d.acquire(ctx); err != nil {
+		return "", err
+	}
+	held := true
+	release := func() {
+		if held {
+			held = false
+			d.release()
+		}
+	}
+	defer release()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, res.URL, nil)
 	if err != nil {
 		return "", permanent(err)
 	}
-	setNavigation(req, d.UserAgent, "same-origin")
-	req.Header.Set("Referer", res.Referer)
+	d.setTransfer(req, res)
 
-	// Probe for an existing part file before choosing a filename: the part
-	// path depends on the name, which the server supplies, so name first.
+	// Name first: the part path depends on it.
 	resp, err := d.Client.Do(req)
 	if err != nil {
 		return "", err
 	}
 
-	name := filenameFrom(resp, job.Name)
+	// res.Name names the encoding that actually answered.
+	fallback := job.Name
+	if res.Name != "" {
+		fallback = res.Name
+	}
+
+	name := filenameFrom(resp, fallback)
 	if !util.IsAudioFile(name) {
 		resp.Body.Close()
 		return "", permanent(fmt.Errorf("refusing %q: not an allowlisted audio file", name))
@@ -99,10 +148,29 @@ func (d *Downloader) attempt(ctx context.Context, job Job) (string, error) {
 	final := filepath.Join(d.OutputDir, name)
 	part := final + ".part"
 
-	// If the finished file is already there at the advertised size, skip.
-	if fi, statErr := os.Stat(final); statErr == nil && resp.ContentLength > 0 && fi.Size() == resp.ContentLength {
+	if d.finished(ctx, final, resp.ContentLength) {
 		resp.Body.Close()
 		return final, nil
+	}
+
+	// This host throttles per connection, so one socket wastes bandwidth.
+	if resp.Header.Get("Accept-Ranges") == "bytes" {
+		if plan, ok := planChunks(resp.ContentLength, d.chunks); ok {
+			resp.Body.Close()
+			release() // the chunks take their own slots
+			path, err := d.chunked(ctx, res, plan, name, final, part)
+			if errors.Is(err, errRangeIgnored) {
+				if err := d.acquire(ctx); err != nil {
+					return "", err
+				}
+				held = true
+				return d.single(ctx, res, name, final, part)
+			}
+			if err != nil {
+				return "", err
+			}
+			return d.embedded(ctx, path)
+		}
 	}
 
 	// Restart the request as a ranged one if a partial file exists. The first
@@ -116,7 +184,70 @@ func (d *Downloader) attempt(ctx context.Context, job Job) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	return d.writeBody(ctx, resp, name, final, part)
+	path, err := d.writeBody(ctx, resp, name, final, part)
+	if err != nil {
+		return "", err
+	}
+	return d.embedded(ctx, path)
+}
+
+// single serves hosts that advertise ranges without honoring them.
+func (d *Downloader) single(ctx context.Context, res *Resolved, name, final, part string) (string, error) {
+	resp, err := d.rangedGet(ctx, res, 0)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	path, err := d.writeBody(ctx, resp, name, final, part)
+	if err != nil {
+		return "", err
+	}
+	return d.embedded(ctx, path)
+}
+
+// embedded attaches art and chapters. Failure is non-fatal: the audio is fine.
+func (d *Downloader) embedded(ctx context.Context, path string) (string, error) {
+	if d.nothingToTag() {
+		return path, nil
+	}
+	if err := d.tag(ctx, path); err != nil {
+		if d.OnCoverError != nil {
+			d.OnCoverError(filepath.Base(path), err)
+		}
+	}
+	return path, nil
+}
+
+// finished tests for a complete download. Tagging changes a file's length, so a
+// size mismatch alone proves nothing.
+func (d *Downloader) finished(ctx context.Context, final string, advertised int64) bool {
+	fi, err := os.Stat(final)
+	if err != nil {
+		return false
+	}
+	if advertised > 0 && fi.Size() == advertised {
+		return true
+	}
+	return d.CoverPath != "" && fi.Size() > 0 && d.hasCover(ctx, final)
+}
+
+func (d *Downloader) acquire(ctx context.Context) error {
+	if d.budget == nil {
+		return nil
+	}
+	return d.budget.Acquire(ctx, 1)
+}
+
+func (d *Downloader) release() {
+	if d.budget != nil {
+		d.budget.Release(1)
+	}
+}
+
+func (d *Downloader) setTransfer(req *http.Request, res *Resolved) {
+	setMediaFetch(req, d.UserAgent)
+	req.Header.Set("Referer", res.Referer)
 }
 
 func (d *Downloader) rangedGet(ctx context.Context, res *Resolved, from int64) (*http.Response, error) {
@@ -124,8 +255,7 @@ func (d *Downloader) rangedGet(ctx context.Context, res *Resolved, from int64) (
 	if err != nil {
 		return nil, permanent(err)
 	}
-	setNavigation(req, d.UserAgent, "same-origin")
-	req.Header.Set("Referer", res.Referer)
+	d.setTransfer(req, res)
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-", from))
 
 	resp, err := d.Client.Do(req)
@@ -282,6 +412,9 @@ func rangeTotal(h string) int64 {
 }
 
 // --- retry ----------------------------------------------------------------
+
+// errRangeIgnored: range support advertised, then the whole file sent anyway.
+var errRangeIgnored = errors.New("host ignored the Range header")
 
 type permanentError struct{ err error }
 

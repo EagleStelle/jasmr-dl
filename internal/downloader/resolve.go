@@ -2,139 +2,74 @@ package downloader
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
-	"strings"
-
-	"github.com/PuerkitoBio/goquery"
 )
 
-// Resolved is the outcome of walking the file host's hop chain: a signed,
-// short-lived URL that actually serves bytes.
+// Resolved is a URL that serves bytes, plus what must accompany it.
 type Resolved struct {
 	URL     string
 	Referer string
+
+	// Name comes from the URL; the media host sends no Content-Disposition.
+	Name string
 }
 
-// Resolve walks a dlc.php link to the URL that serves the file.
-//
-//	/d/<id>                        -> 302 -> landing page
-//	parse hx-get="/<id>/download?t=<token>"
-//	GET it with HX-Request: true   -> 204 + Hx-Redirect
-//	/d/<id>?v=<signature>          -> the file
-//
-// The signature is short-lived, so this must run per download rather than as a
-// batch pre-pass, and its result must not be cached across runs.
-func Resolve(ctx context.Context, client *http.Client, userAgent, linkURL string) (*Resolved, error) {
-	// Hop 1-2: the 302 to the landing page is an ordinary redirect, so the
-	// client follows it. resp.Request.URL is where we actually landed.
-	doc, landing, err := fetchDoc(ctx, client, userAgent, linkURL, "")
-	if err != nil {
-		return nil, fmt.Errorf("landing page: %w", err)
+// pickEncoding probes a track's encodings; pages advertise ones never uploaded.
+func (d *Downloader) pickEncoding(ctx context.Context, job Job) (*Resolved, error) {
+	found := func(target string) *Resolved {
+		return &Resolved{URL: target, Referer: job.Referer, Name: urlName(target)}
+	}
+	if len(job.Alternates) == 0 {
+		return found(job.LinkURL), nil
 	}
 
-	// Hop 3: the download trigger is an htmx attribute, not an anchor href.
-	tokenPath, err := findDownloadPath(doc)
-	if err != nil {
-		return nil, err
+	var lastErr error
+	for _, candidate := range append([]string{job.LinkURL}, job.Alternates...) {
+		err := d.probe(ctx, candidate, job.Referer)
+		if err == nil {
+			return found(candidate), nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		lastErr = err
 	}
-	trigger, err := landing.Parse(tokenPath)
-	if err != nil {
-		return nil, fmt.Errorf("bad download path %q: %w", tokenPath, err)
-	}
-
-	// Hop 4: answers 204 with the real URL in a header. This is an htmx
-	// convention, not an HTTP redirect, so http.Client will not follow it.
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, trigger.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	setScriptFetch(req, userAgent)
-	req.Header.Set("Referer", landing.String())
-	req.Header.Set("HX-Request", "true") // omit this and the HTML comes back instead
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("download trigger: %w", err)
-	}
-	defer resp.Body.Close()
-
-	final := strings.TrimSpace(resp.Header.Get("Hx-Redirect"))
-	if final == "" {
-		return nil, fmt.Errorf("no Hx-Redirect header, got %s", resp.Status)
-	}
-	abs, err := landing.Parse(final)
-	if err != nil {
-		return nil, fmt.Errorf("bad Hx-Redirect %q: %w", final, err)
-	}
-	if abs.Scheme != "http" && abs.Scheme != "https" {
-		return nil, fmt.Errorf("Hx-Redirect is not http(s): %q", final)
-	}
-
-	return &Resolved{URL: abs.String(), Referer: landing.String()}, nil
+	return nil, fmt.Errorf("the page offers no encoding this host has: %w", lastErr)
 }
 
-// findDownloadPath picks the primary download trigger out of the landing page.
-// The page also carries a mirror (alt=true) and an in-browser preview, both
-// using the same attribute.
-func findDownloadPath(doc *goquery.Document) (string, error) {
-	var primary, mirror string
-
-	doc.Find("[hx-get]").Each(func(_ int, sel *goquery.Selection) {
-		v, _ := sel.Attr("hx-get")
-		if !strings.Contains(v, "/download") {
-			return
-		}
-		if strings.Contains(v, "alt=") {
-			if mirror == "" {
-				mirror = v
-			}
-			return
-		}
-		if primary == "" {
-			primary = v
-		}
-	})
-
-	switch {
-	case primary != "":
-		return primary, nil
-	case mirror != "":
-		return mirror, nil
-	default:
-		return "", errors.New("no download trigger on landing page")
+func urlName(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
 	}
+	return clean(u.Path)
 }
 
-// fetchDoc GETs a URL and parses HTML, returning the URL actually landed on
-// after redirects.
-func fetchDoc(ctx context.Context, client *http.Client, userAgent, target, referer string) (*goquery.Document, *url.URL, error) {
+// probe asks for one byte to learn whether the host holds the URL.
+func (d *Downloader) probe(ctx context.Context, target, referer string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
-	site := "cross-site"
-	if referer != "" {
-		req.Header.Set("Referer", referer)
-		site = "same-origin"
-	}
-	setNavigation(req, userAgent, site)
+	setMediaFetch(req, d.UserAgent)
+	req.Header.Set("Referer", referer)
+	req.Header.Set("Range", "bytes=0-0")
 
-	resp, err := client.Do(req)
+	resp, err := d.Client.Do(req)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
-	defer resp.Body.Close()
+	// Drain so the connection is reused.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1))
+	resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("GET %s: %s", target, resp.Status)
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusPartialContent:
+		return nil
+	default:
+		return fmt.Errorf("GET %s: %s", target, resp.Status)
 	}
-
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	if err != nil {
-		return nil, nil, err
-	}
-	return doc, resp.Request.URL, nil
 }
