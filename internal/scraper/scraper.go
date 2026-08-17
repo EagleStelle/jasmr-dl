@@ -49,16 +49,30 @@ func (s *Scraper) Album(ctx context.Context, pageURL string) (*Album, error) {
 	return album, nil
 }
 
-// fetchDoc GETs and parses HTML.
+// fetchDoc GETs and parses HTML. The headers are a browser opening the page by
+// typing its address, which Cloudflare weighs; the handshake carries the other
+// half, see downloader/tls.go.
 func (s *Scraper) fetchDoc(ctx context.Context, target string) (*goquery.Document, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
 	}
+	h := req.Header
 	// The Go default UA ("Go-http-client/1.1") is widely blocked.
-	req.Header.Set("User-Agent", s.userAgent)
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "ja,en;q=0.8")
+	h.Set("User-Agent", s.userAgent)
+	h.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+	h.Set("Accept-Language", "ja,en-US;q=0.9,en;q=0.8")
+	h.Set("Upgrade-Insecure-Requests", "1")
+	h.Set("Sec-Fetch-Dest", "document")
+	h.Set("Sec-Fetch-Mode", "navigate")
+	h.Set("Sec-Fetch-Site", "none")
+	h.Set("Sec-Fetch-User", "?1")
+	// Hints come from the UA so --user-agent moves both together.
+	if v := util.ChromeMajorVersion(s.userAgent); v != "" {
+		h.Set("Sec-CH-UA", fmt.Sprintf(`"Chromium";v="%s", "Not_A Brand";v="24", "Google Chrome";v="%s"`, v, v))
+		h.Set("Sec-CH-UA-Mobile", "?0")
+		h.Set("Sec-CH-UA-Platform", `"Windows"`)
+	}
 
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -67,7 +81,7 @@ func (s *Scraper) fetchDoc(ctx context.Context, target string) (*goquery.Documen
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: %s", target, resp.Status)
+		return nil, util.BadStatus(target, resp)
 	}
 	return goquery.NewDocumentFromReader(resp.Body)
 }
