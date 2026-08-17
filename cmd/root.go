@@ -17,7 +17,10 @@ var (
 	concurrency int
 	retries     int
 	userAgent   string
-	mode        int
+	ffmpegPath  string
+	noCover     bool
+	noChapters  bool
+	noTags      bool
 	verbose     bool
 )
 
@@ -25,11 +28,13 @@ var rootCmd = &cobra.Command{
 	Use:   "jasmr-dl <url>",
 	Short: "Download audio albums from japaneseasmr.com",
 	Long: "jasmr-dl downloads every track on a japaneseasmr.com album page,\n" +
-		"concurrently, with resume and retry.",
-	Example: "  jasmr-dl https://japaneseasmr.com/12345/          # combined file\n" +
-		"  jasmr-dl https://japaneseasmr.com/12345/ -m 1     # split tracks\n" +
-		"  jasmr-dl https://japaneseasmr.com/12345/ -m 2     # both\n" +
-		"  jasmr-dl https://japaneseasmr.com/12345/ -o ./out -c 4",
+		"straight from the page's own players, with resume and retry.\n\n" +
+		"Album art and, where the post has them, chapters are embedded in the\n" +
+		"output. Posts that serve only the site's stream are reassembled with\n" +
+		"ffmpeg, which must be installed for those.",
+	Example: "  jasmr-dl https://japaneseasmr.com/12345/\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ -o ./out -c 8\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ --no-cover",
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
@@ -52,9 +57,12 @@ func Execute() {
 func init() {
 	f := rootCmd.PersistentFlags()
 	f.StringVarP(&outputDir, "output", "o", "", "download directory (default: the album title)")
-	f.IntVarP(&mode, "mode", "m", 0, "what to download: 0 combined, 1 split tracks, 2 both")
-	f.IntVarP(&concurrency, "concurrency", "c", 3, "simultaneous downloads")
+	f.IntVarP(&concurrency, "concurrency", "c", 3, "files to download at once")
 	f.IntVarP(&retries, "retries", "r", 4, "per-file retry attempts")
 	f.StringVarP(&userAgent, "user-agent", "u", defaultUserAgent, "User-Agent sent with every request")
+	f.BoolVarP(&noCover, "no-cover", "C", false, "do not embed album art")
+	f.BoolVarP(&noChapters, "no-chapters", "H", false, "do not embed the track list as chapters")
+	f.BoolVarP(&noTags, "no-tags", "T", false, "do not write title, artist or album metadata")
+	f.StringVarP(&ffmpegPath, "ffmpeg", "f", "", "ffmpeg binary, needed for HLS posts and cover art (default: found on PATH)")
 	f.BoolVarP(&verbose, "verbose", "v", false, "debug logging")
 }

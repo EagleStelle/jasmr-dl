@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"os"
@@ -28,10 +29,6 @@ func runGet(cmd *cobra.Command, args []string) error {
 	if retries < 0 {
 		return fmt.Errorf("--retries cannot be negative, got %d", retries)
 	}
-	m := scraper.Mode(mode)
-	if !m.Valid() {
-		return fmt.Errorf("--mode must be 0 (combined), 1 (split) or 2 (both), got %d", mode)
-	}
 
 	// One Ctrl+C cancels every in-flight request cleanly.
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
@@ -39,31 +36,18 @@ func runGet(cmd *cobra.Command, args []string) error {
 
 	sc := scraper.New(downloader.NewClient(), userAgent)
 	cmd.Printf("[info] fetching %s\n", target)
-	debugf(cmd, "two requests, spaced by the %s robots.txt crawl delay", scraper.PoliteDelay)
 
 	album, err := sc.Album(ctx, target.String())
 	if err != nil {
 		return err
 	}
+	reportSource(cmd, album)
 
-	tracks := album.Select(m)
-
-	// Not every listing carries a whole-work file. Falling back beats
-	// exiting with nothing when the default mode finds none.
-	if len(tracks) == 0 && m == scraper.ModeCombined {
-		cmd.PrintErrln("[warn] no combined file in this listing, falling back to split tracks")
-		m = scraper.ModeSplit
-		tracks = album.Select(m)
-	}
-
-	cmd.Printf("[info] %d of %s selected\n", len(tracks), plural(len(album.Tracks), "file"))
+	cmd.Printf("[info] %s to download\n", plural(len(album.Tracks), "file"))
 	debugf(cmd, "cover: %s", orNone(album.CoverURL))
-	for _, t := range tracks {
+	debugf(cmd, "chapters: %d", len(album.Chapters))
+	for _, t := range album.Tracks {
 		debugf(cmd, "%s: %s", t.Title, t.LinkURL)
-	}
-
-	if len(tracks) == 0 {
-		return fmt.Errorf("no files to download in mode %d (%s)", mode, m)
 	}
 
 	dir := outputDirFor(album.Title)
@@ -72,29 +56,88 @@ func runGet(cmd *cobra.Command, args []string) error {
 	}
 	cmd.Printf("[info] saving to %s\n", dir)
 
-	jobs := make([]downloader.Job, 0, len(tracks))
-	for _, t := range tracks {
-		jobs = append(jobs, downloader.Job{Name: t.Title, LinkURL: t.LinkURL})
+	jobs := make([]downloader.Job, 0, len(album.Tracks))
+	for _, t := range album.Tracks {
+		jobs = append(jobs, downloader.Job{
+			Name:       t.Title,
+			LinkURL:    t.LinkURL,
+			Source:     t.Source,
+			Alternates: t.Alternates,
+			Referer:    album.PageURL,
+		})
 	}
 
 	prog := downloader.NewProgress(cmd.OutOrStdout())
 	d := &downloader.Downloader{
-		Client:     downloader.NewClient(),
-		UserAgent:  userAgent,
-		OutputDir:  dir,
-		Retries:    retries,
-		OnStart:    prog.Start,
-		OnProgress: prog.Update,
+		Client:       downloader.NewClient(),
+		UserAgent:    userAgent,
+		OutputDir:    dir,
+		Retries:      retries,
+		FFmpeg:       ffmpegPath,
+		CoverPath:    fetchCover(ctx, cmd, album, dir),
+		Chapters:     chaptersFor(cmd, album),
+		Tags:         tagsFor(album),
+		OnCoverError: func(name string, err error) { cmd.PrintErrf("[warn] %s: %v\n", name, err) },
+		OnStart:      prog.Start,
+		OnProgress:   prog.Update,
+		OnStartCount: prog.StartCount,
 	}
 
-	debugf(cmd, "concurrency %d, %d retries per file", concurrency, retries)
+	debugf(cmd, "%d files at once, %d retries per file", concurrency, retries)
 	results := d.Run(ctx, jobs, concurrency)
 
-	// Drain the renderer before printing the summary, or the two fight over
-	// the same lines.
+	// Drain the renderer first, or it fights the summary for the same lines.
 	prog.Wait()
 
 	return report(cmd, results)
+}
+
+// tagsFor builds the metadata written into every file.
+func tagsFor(album *scraper.Album) downloader.Tags {
+	if noTags {
+		return downloader.Tags{}
+	}
+	return downloader.Tags{
+		Title:   album.Title,
+		Artist:  album.Artists,
+		Album:   album.Title,
+		Comment: album.PageURL,
+	}
+}
+
+// chaptersFor returns chapters only when one file holds the whole work.
+func chaptersFor(cmd *cobra.Command, album *scraper.Album) []scraper.Chapter {
+	if noChapters || len(album.Chapters) == 0 {
+		return nil
+	}
+	if len(album.Tracks) != 1 {
+		debugf(cmd, "%d chapters ignored: the work is already split across files", len(album.Chapters))
+		return nil
+	}
+	return album.Chapters
+}
+
+// fetchCover is best-effort: missing art must not stop a download.
+func fetchCover(ctx context.Context, cmd *cobra.Command, album *scraper.Album, dir string) string {
+	if noCover || album.CoverURL == "" {
+		return ""
+	}
+	path, err := downloader.FetchCover(ctx, downloader.NewClient(), userAgent, album.CoverURL, album.PageURL, dir)
+	if err != nil {
+		cmd.PrintErrf("[warn] no cover art: %v\n", err)
+		return ""
+	}
+	debugf(cmd, "cover saved to %s", path)
+	return path
+}
+
+// reportSource warns when a post offers only its stream.
+func reportSource(cmd *cobra.Command, album *scraper.Album) {
+	if album.Source() != scraper.SourceHLS {
+		return
+	}
+	cmd.PrintErrln("[warn] this post serves no audio file, only the site's stream, so the")
+	cmd.PrintErrln("[warn] audio is reassembled from it and ffmpeg is required")
 }
 
 // report lists the failures and returns an error only if every file failed.
@@ -118,15 +161,14 @@ func report(cmd *cobra.Command, results []downloader.Result) error {
 	return nil
 }
 
-// debugf writes a line only under --verbose. It goes to stderr so that piping
-// stdout stays clean.
+// debugf writes to stderr under --verbose, keeping piped stdout clean.
 func debugf(cmd *cobra.Command, format string, args ...any) {
 	if verbose {
 		cmd.PrintErrf("[debug] "+format+"\n", args...)
 	}
 }
 
-// plural renders a count with its noun, so no line has to say "file(s)".
+// plural avoids having to write "file(s)".
 func plural(n int, noun string) string {
 	if n == 1 {
 		return "1 " + noun
@@ -134,9 +176,7 @@ func plural(n int, noun string) string {
 	return fmt.Sprintf("%d %ss", n, noun)
 }
 
-// parseAlbumURL rejects anything that is not an http(s) URL on the target host.
-// Matching on the parsed hostname, not a substring, keeps
-// japaneseasmr.com.evil.com from passing.
+// parseAlbumURL matches the hostname, not a substring, so evil.com cannot pass.
 func parseAlbumURL(raw string) (*url.URL, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
@@ -152,9 +192,7 @@ func parseAlbumURL(raw string) (*url.URL, error) {
 	return u, nil
 }
 
-// outputDirFor builds the destination directory. The album title is untrusted
-// page content, so it is sanitized into a single path component rather than
-// pasted into a path directly.
+// outputDirFor sanitizes the title, untrusted page content, into one component.
 func outputDirFor(title string) string {
 	if outputDir != "" {
 		return outputDir
