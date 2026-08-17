@@ -17,6 +17,7 @@ var (
 	concurrency int
 	retries     int
 	userAgent   string
+	combined    bool
 	verbose     bool
 )
 
@@ -51,5 +52,6 @@ func init() {
 	f.IntVarP(&concurrency, "concurrency", "c", 3, "simultaneous downloads")
 	f.IntVar(&retries, "retries", 4, "per-file retry attempts")
 	f.StringVar(&userAgent, "user-agent", defaultUserAgent, "User-Agent sent with every request")
+	f.BoolVar(&combined, "combined", false, "also download the combined whole-work file")
 	f.BoolVarP(&verbose, "verbose", "v", false, "debug logging")
 }

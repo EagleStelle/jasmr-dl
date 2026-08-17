@@ -3,9 +3,16 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"os"
+	"os/signal"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"jasmr-dl/internal/downloader"
+	"jasmr-dl/internal/scraper"
+	"jasmr-dl/internal/util"
 )
 
 const targetHost = "japaneseasmr.com"
@@ -33,15 +40,46 @@ func runGet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--retries cannot be negative, got %d", retries)
 	}
 
+	// One Ctrl+C cancels every in-flight request cleanly.
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+	defer stop()
+
+	sc := scraper.New(downloader.NewClient(), userAgent)
 	if verbose {
-		cmd.Printf("url:         %s\n", target)
-		cmd.Printf("output:      %s\n", outputDirOrDefault())
-		cmd.Printf("concurrency: %d\n", concurrency)
-		cmd.Printf("retries:     %d\n", retries)
-		cmd.Printf("user-agent:  %s\n", userAgent)
+		cmd.Printf("fetching %s\n", target)
+		cmd.Printf("(two requests, spaced by the %s robots.txt crawl delay)\n", scraper.PoliteDelay)
 	}
 
-	return fmt.Errorf("scraper not implemented yet (phase 2)")
+	album, err := sc.Album(ctx, target.String())
+	if err != nil {
+		return err
+	}
+
+	printAlbum(cmd, album)
+	return fmt.Errorf("downloader not implemented yet (phase 3)")
+}
+
+func printAlbum(cmd *cobra.Command, a *scraper.Album) {
+	cmd.Printf("\ntitle:  %s\n", a.Title)
+	cmd.Printf("rj:     %s\n", a.RJCode)
+	cmd.Printf("cover:  %s\n", orNone(a.CoverURL))
+	cmd.Printf("output: %s\n", outputDirFor(a.Title))
+
+	tracks := a.Downloadable(combined)
+	cmd.Printf("\ntracks: %d of %d listed\n", len(tracks), len(a.Tracks))
+	for _, t := range tracks {
+		label := fmt.Sprintf("%02d", t.Index)
+		if t.Combined {
+			label = "--"
+		}
+		cmd.Printf("  [%s] %s\n", label, t.Title)
+		if verbose {
+			cmd.Printf("       %s\n", t.LinkURL)
+		}
+	}
+	if !combined {
+		cmd.Printf("\n(combined whole-work file skipped; pass --combined to include it)\n")
+	}
 }
 
 // parseAlbumURL rejects anything that is not an http(s) URL on the target host.
@@ -62,9 +100,19 @@ func parseAlbumURL(raw string) (*url.URL, error) {
 	return u, nil
 }
 
-func outputDirOrDefault() string {
-	if outputDir == "" {
-		return "./<Album Title>"
+// outputDirFor builds the destination directory. The album title is untrusted
+// page content, so it is sanitized into a single path component rather than
+// pasted into a path directly.
+func outputDirFor(title string) string {
+	if outputDir != "" {
+		return outputDir
 	}
-	return outputDir
+	return filepath.Join(".", util.Sanitize(title))
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "(none)"
+	}
+	return s
 }
