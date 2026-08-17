@@ -22,7 +22,7 @@ var trackNumber = regexp.MustCompile(`-\s*(\d+)_`)
 // ErrListingUnavailable means dlc.php answered 200 but served its soft-error
 // page instead of the listing. The site does this under load or when a client
 // has been fetching too often, so it is transient rather than fatal.
-var ErrListingUnavailable = errors.New("download listing temporarily unavailable (site returned its error page) — most likely rate limiting; wait a few minutes")
+var ErrListingUnavailable = errors.New("rate limited by japaneseasmr.com, wait a few minutes")
 
 // listingErrorMarker is the ASCII portion of the soft-error page. The rest of
 // that page is mojibake and not safe to match on.
@@ -107,7 +107,7 @@ func (s *Scraper) tracksOnce(ctx context.Context, dlcURL string) ([]Track, error
 		if strings.Contains(doc.Find("body").Text(), listingErrorMarker) {
 			return nil, ErrListingUnavailable
 		}
-		return nil, fmt.Errorf("no audio links found at %s: listing layout may have changed", dlcURL)
+		return nil, fmt.Errorf("no audio links at %s", dlcURL)
 	}
 	return tracks, nil
 }

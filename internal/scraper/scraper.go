@@ -57,7 +57,7 @@ func (s *Scraper) Album(ctx context.Context, pageURL string) (*Album, error) {
 		RJCode:   extractRJCode(doc),
 	}
 	if album.RJCode == "" {
-		return nil, fmt.Errorf("no RJ code found on %s: page layout may have changed", pageURL)
+		return nil, fmt.Errorf("no RJ code on %s", pageURL)
 	}
 
 	dlcURL, err := extractDLCLink(doc, base, album.RJCode)

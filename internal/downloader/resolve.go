@@ -2,6 +2,7 @@ package downloader
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -62,7 +63,7 @@ func Resolve(ctx context.Context, client *http.Client, userAgent, linkURL string
 
 	final := strings.TrimSpace(resp.Header.Get("Hx-Redirect"))
 	if final == "" {
-		return nil, fmt.Errorf("download trigger returned %s with no Hx-Redirect; host flow may have changed", resp.Status)
+		return nil, fmt.Errorf("no Hx-Redirect header, got %s", resp.Status)
 	}
 	abs, err := landing.Parse(final)
 	if err != nil {
@@ -103,7 +104,7 @@ func findDownloadPath(doc *goquery.Document) (string, error) {
 	case mirror != "":
 		return mirror, nil
 	default:
-		return "", fmt.Errorf("no download trigger on landing page; host flow may have changed")
+		return "", errors.New("no download trigger on landing page")
 	}
 }
 
