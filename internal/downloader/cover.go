@@ -2,7 +2,6 @@ package downloader
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"jasmr-dl/internal/util"
 )
 
 const maxCoverBytes = 16 << 20
@@ -40,7 +41,7 @@ func FetchCover(ctx context.Context, client *http.Client, userAgent, coverURL, r
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", badStatus(coverURL, resp)
+		return "", util.BadStatus(coverURL, resp)
 	}
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxCoverBytes))
@@ -106,23 +107,11 @@ func (d *Downloader) hasCover(ctx context.Context, audio string) bool {
 // ffprobe reads one value out of a file. Errors are quiet: only the value the
 // caller asked for reaches stdout.
 func (d *Downloader) ffprobe(ctx context.Context, args ...string) (string, error) {
-	bin, err := d.ffprobePath()
+	tools, err := findFFmpeg()
 	if err != nil {
 		return "", err
 	}
-	return runProbe(ctx, bin, slices.Concat([]string{"-v", "error"}, args)...)
-}
-
-func (d *Downloader) ffprobePath() (string, error) {
-	ffmpeg, err := d.ffmpegPath()
-	if err != nil {
-		return "", err
-	}
-	probe := filepath.Join(filepath.Dir(ffmpeg), "ffprobe"+filepath.Ext(ffmpeg))
-	if _, err := os.Stat(probe); err != nil {
-		return "", errors.New("ffprobe not found beside ffmpeg")
-	}
-	return probe, nil
+	return runProbe(ctx, tools.ffprobe, slices.Concat([]string{"-v", "error"}, args)...)
 }
 
 // extOf is a lowercase file extension, including the dot.

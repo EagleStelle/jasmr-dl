@@ -37,7 +37,7 @@ const (
 // assembleHLS rebuilds a work from its segments, kept until the remux succeeds.
 func (d *Downloader) assembleHLS(ctx context.Context, job Job) (string, error) {
 	// Before fetching anything: failing after 160 MB is no use.
-	ffmpeg, err := d.ffmpegPath()
+	tools, err := findFFmpeg()
 	if err != nil {
 		return "", permanent(err)
 	}
@@ -65,7 +65,7 @@ func (d *Downloader) assembleHLS(ctx context.Context, job Job) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := d.remux(ctx, ffmpeg, segDir, paths, final); err != nil {
+	if err := d.remux(ctx, tools.ffmpeg, segDir, paths, final); err != nil {
 		return "", err
 	}
 	os.RemoveAll(segDir)
@@ -73,20 +73,6 @@ func (d *Downloader) assembleHLS(ctx context.Context, job Job) (string, error) {
 	// Tag from the finished file: chapter ends need its real length, and the
 	// nominal EXTINF sum overshoots it.
 	return d.embedded(ctx, final)
-}
-
-func (d *Downloader) ffmpegPath() (string, error) {
-	if d.FFmpeg != "" {
-		if _, err := os.Stat(d.FFmpeg); err != nil {
-			return "", fmt.Errorf("ffmpeg not at %s: %w", d.FFmpeg, err)
-		}
-		return d.FFmpeg, nil
-	}
-	p, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		return "", errors.New("this post only streams HLS, which needs ffmpeg to reassemble: install it or pass --ffmpeg")
-	}
-	return p, nil
 }
 
 // fetchPlaylist follows one variant level if given a master playlist.

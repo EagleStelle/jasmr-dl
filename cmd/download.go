@@ -17,7 +17,10 @@ import (
 	"jasmr-dl/internal/util"
 )
 
-const targetHost = "japaneseasmr.com"
+const (
+	targetHost     = "japaneseasmr.com"
+	cookieFileName = "cookies.txt"
+)
 
 func runDownload(cmd *cobra.Command, args []string) error {
 	target, err := parseAlbumURL(args[0])
@@ -35,15 +38,30 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
 	defer stop()
 
+	jar, err := cookieJar(cmd)
+	if err != nil {
+		return err
+	}
+
+	// The UA is read off this machine's browser, because a cookie only clears
+	// the challenge when it accompanies the UA that solved it.
+	userAgent := util.UserAgent()
+	debugf(cmd, "user-agent: %s", userAgent)
+
 	// One client for the run: its connection pool is what keeps sockets warm
 	// across the page fetch, the cover and every track.
-	client := downloader.NewClient()
+	client := downloader.NewClient(jar)
 	sc := scraper.New(client, userAgent)
 	cmd.Printf("[info] fetching %s\n", target)
 
 	album, err := sc.Album(ctx, target.String())
 	if err != nil {
 		return err
+	}
+	// The page came back, so whatever cleared the challenge works. Only now is
+	// it worth keeping, and worth overwriting whatever was kept before.
+	if cookieFile != "" {
+		installCookies(cmd, cookieFile)
 	}
 	reportSource(cmd, album)
 
@@ -77,7 +95,6 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		UserAgent:    userAgent,
 		OutputDir:    dir,
 		Retries:      retries,
-		FFmpeg:       ffmpegPath,
 		CoverPath:    fetchCover(ctx, cmd, client, album, dir),
 		Chapters:     chaptersFor(cmd, album),
 		Tags:         tagsFor(album),
@@ -94,6 +111,85 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	prog.Wait()
 
 	return report(cmd, results)
+}
+
+// cookieJar loads --cookies, or a cookies.txt sitting beside the binary. A nil
+// jar means neither was there.
+func cookieJar(cmd *cobra.Command) (http.CookieJar, error) {
+	path := cookieFile
+	if path == "" {
+		path = foundCookieFile()
+	}
+	if path == "" {
+		return nil, nil
+	}
+
+	jar, err := downloader.LoadCookieJar(path)
+	if err != nil {
+		return nil, fmt.Errorf("read cookies: %w", err)
+	}
+	debugf(cmd, "cookies from %s", path)
+	return jar, nil
+}
+
+// foundCookieFile looks beside the binary and then in the working directory, so
+// the file only has to exist to be used.
+func foundCookieFile() string {
+	var dirs []string
+	if exe, err := os.Executable(); err == nil {
+		dirs = append(dirs, filepath.Dir(exe))
+	}
+	dirs = append(dirs, ".")
+
+	for _, dir := range dirs {
+		path := filepath.Join(dir, cookieFileName)
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path
+		}
+	}
+	return ""
+}
+
+// installCookies keeps a working --cookies file beside the binary under the name
+// picked up automatically, so the flag is only ever needed once per export.
+//
+// Failing to save is not worth ending a run over: the cookies work, they just
+// will not be there next time.
+func installCookies(cmd *cobra.Command, src string) {
+	exe, err := os.Executable()
+	if err != nil {
+		debugf(cmd, "cookies not saved: %v", err)
+		return
+	}
+
+	dst := filepath.Join(filepath.Dir(exe), cookieFileName)
+	if sameFile(src, dst) {
+		return
+	}
+
+	data, err := os.ReadFile(src)
+	if err == nil {
+		err = os.WriteFile(dst, data, 0o600)
+	}
+	if err != nil {
+		cmd.PrintErrf("[warn] cookies not saved for next time: %v\n", err)
+		return
+	}
+	cmd.Printf("[info] cookies saved to %s, so -c is not needed again\n", dst)
+}
+
+// sameFile compares the files themselves, since two paths to one file differ
+// freely in case and separators on Windows.
+func sameFile(a, b string) bool {
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(ai, bi)
 }
 
 // tagsFor builds the metadata written into every file.
@@ -126,7 +222,7 @@ func fetchCover(ctx context.Context, cmd *cobra.Command, client *http.Client, al
 	if noCover || album.CoverURL == "" {
 		return ""
 	}
-	path, err := downloader.FetchCover(ctx, client, userAgent, album.CoverURL, album.PageURL, dir)
+	path, err := downloader.FetchCover(ctx, client, util.UserAgent(), album.CoverURL, album.PageURL, dir)
 	if err != nil {
 		cmd.PrintErrf("[warn] no cover art: %v\n", err)
 		return ""

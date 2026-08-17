@@ -75,7 +75,7 @@ func (d *Downloader) tag(ctx context.Context, audio string) error {
 	if !ok || d.nothingToTag() {
 		return nil
 	}
-	ffmpeg, err := d.ffmpegPath()
+	tools, err := findFFmpeg()
 	if err != nil {
 		return err
 	}
@@ -102,7 +102,7 @@ func (d *Downloader) tag(ctx context.Context, audio string) error {
 		[]string{"-i", audio}, inputs, opts,
 		[]string{"-f", muxer, staged})
 
-	out, err := runFFmpeg(ctx, ffmpeg, args...)
+	out, err := runFFmpeg(ctx, tools.ffmpeg, args...)
 	if err != nil {
 		os.Remove(staged)
 		return fmt.Errorf("tag: %w: %s", err, out)

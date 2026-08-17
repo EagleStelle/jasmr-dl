@@ -42,9 +42,6 @@ type Downloader struct {
 	OutputDir string
 	Retries   int
 
-	// FFmpeg is the binary; empty means look on PATH.
-	FFmpeg string
-
 	CoverPath string
 
 	// Chapters only mean anything when one file holds the whole work.
