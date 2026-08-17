@@ -2,6 +2,7 @@ package scraper
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -18,8 +19,37 @@ import (
 // file rather than an individual track.
 var trackNumber = regexp.MustCompile(`-\s*(\d+)_`)
 
-// tracks fetches the dlc.php listing and returns one Track per audio anchor.
+// ErrListingUnavailable means dlc.php answered 200 but served its soft-error
+// page instead of the listing. The site does this under load or when a client
+// has been fetching too often, so it is transient rather than fatal.
+var ErrListingUnavailable = errors.New("download listing temporarily unavailable (site returned its error page) — most likely rate limiting; wait a few minutes")
+
+// listingErrorMarker is the ASCII portion of the soft-error page. The rest of
+// that page is mojibake and not safe to match on.
+const listingErrorMarker = "Something went wrong"
+
+// listingAttempts covers a brief throttle. Each retry waits the crawl delay.
+const listingAttempts = 3
+
+// tracks fetches the dlc.php listing and returns one Track per audio anchor,
+// retrying through the site's transient error page.
 func (s *Scraper) tracks(ctx context.Context, dlcURL string) ([]Track, error) {
+	var lastErr error
+	for i := 0; i < listingAttempts; i++ {
+		tracks, err := s.tracksOnce(ctx, dlcURL)
+		if err == nil {
+			return tracks, nil
+		}
+		if !errors.Is(err, ErrListingUnavailable) {
+			return nil, err
+		}
+		lastErr = err
+		// fetchDoc already waits the crawl delay before each retry.
+	}
+	return nil, lastErr
+}
+
+func (s *Scraper) tracksOnce(ctx context.Context, dlcURL string) ([]Track, error) {
 	doc, err := s.fetchDoc(ctx, dlcURL)
 	if err != nil {
 		return nil, fmt.Errorf("fetch download listing: %w", err)
@@ -70,6 +100,13 @@ func (s *Scraper) tracks(ctx context.Context, dlcURL string) ([]Track, error) {
 	})
 
 	if len(tracks) == 0 {
+		// Distinguish "site is throttling us" from "our selectors broke".
+		// Both arrive as HTTP 200 with no links, but only one is worth
+		// retrying, and reporting the wrong one sends you debugging
+		// selectors that are fine.
+		if strings.Contains(doc.Find("body").Text(), listingErrorMarker) {
+			return nil, ErrListingUnavailable
+		}
 		return nil, fmt.Errorf("no audio links found at %s: listing layout may have changed", dlcURL)
 	}
 	return tracks, nil

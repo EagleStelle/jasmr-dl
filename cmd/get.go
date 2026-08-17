@@ -72,18 +72,22 @@ func runGet(cmd *cobra.Command, args []string) error {
 		jobs = append(jobs, downloader.Job{Name: t.Title, LinkURL: t.LinkURL})
 	}
 
+	bars := downloader.NewBarSet(cmd.OutOrStdout())
 	d := &downloader.Downloader{
-		Client:    downloader.NewClient(),
-		UserAgent: userAgent,
-		OutputDir: dir,
-		Retries:   retries,
-		OnStart: func(name string, total int64) {
-			cmd.Printf("  ↓ %s (%s)\n", name, humanSize(total))
-		},
+		Client:     downloader.NewClient(),
+		UserAgent:  userAgent,
+		OutputDir:  dir,
+		Retries:    retries,
+		OnStart:    bars.Start,
+		OnProgress: bars.Update,
 	}
 
 	cmd.Printf("\ndownloading %d file(s) into %s with concurrency %d\n\n", len(jobs), dir, concurrency)
 	results := d.Run(ctx, jobs, concurrency)
+
+	// Drain the renderer before printing the summary, or the two fight over
+	// the same lines.
+	bars.Wait()
 
 	return report(cmd, results)
 }
