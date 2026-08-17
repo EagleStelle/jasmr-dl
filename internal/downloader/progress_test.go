@@ -2,6 +2,7 @@ package downloader
 
 import (
 	"io"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -80,6 +81,84 @@ func TestUpdateWithoutStartIsIgnored(t *testing.T) {
 	bs := NewProgress(io.Discard)
 	bs.Update("ghost.m4a", 10, 100)
 	waitOrFail(t, bs)
+}
+
+// A steady transfer must read as its real speed, and read it early: an ETA
+// that starts at a fraction of the true rate is worse than none.
+func TestRateMeterReadsSteadySpeed(t *testing.T) {
+	const perTick = 150 << 10 // 150 KiB every 150 ms
+	want := float64(perTick) / 0.15
+
+	var (
+		m       rateMeter
+		now     = time.Now()
+		current int64
+	)
+	m.observe(now, current)
+
+	for i := 1; i <= 40; i++ {
+		now = now.Add(150 * time.Millisecond)
+		current += perTick
+		rate := m.observe(now, current)
+		if off := math.Abs(rate-want) / want; off > 0.01 {
+			t.Fatalf("sample %d: rate = %.0f B/s, want %.0f", i, rate, want)
+		}
+	}
+}
+
+// A connection that stops moving must bleed the rate down, or the ETA counts
+// toward a finish that is not coming.
+func TestRateMeterDecaysWhileStalled(t *testing.T) {
+	var (
+		m       rateMeter
+		now     = time.Now()
+		current int64
+		rate    float64
+	)
+	m.observe(now, current)
+	for range 20 {
+		now = now.Add(150 * time.Millisecond)
+		current += 150 << 10
+		rate = m.observe(now, current)
+	}
+
+	now = now.Add(30 * time.Second)
+	stalled := m.observe(now, current)
+	if stalled >= rate/100 {
+		t.Fatalf("stalled rate = %.0f B/s, want well under %.0f", stalled, rate/100)
+	}
+}
+
+// An estimated total can walk a line backwards. That must not read as a
+// negative speed, which would print an ETA in the past.
+func TestRateMeterIgnoresBackwardsReadings(t *testing.T) {
+	var (
+		m   rateMeter
+		now = time.Now()
+	)
+	m.observe(now, 1000)
+	if rate := m.observe(now.Add(time.Second), 400); rate < 0 {
+		t.Fatalf("rate = %.0f B/s, want at least 0", rate)
+	}
+}
+
+func TestFormatETA(t *testing.T) {
+	cases := []struct {
+		in   time.Duration
+		want string
+	}{
+		{0, "00:00"},
+		{45 * time.Second, "00:45"},
+		{90*time.Second + 400*time.Millisecond, "01:30"},
+		{59*time.Minute + 59*time.Second, "59:59"},
+		{time.Hour + 2*time.Minute + 3*time.Second, "1:02:03"},
+		{12*time.Hour + 34*time.Minute + 56*time.Second, "12:34:56"},
+	}
+	for _, c := range cases {
+		if got := formatETA(c.in); got != c.want {
+			t.Errorf("formatETA(%s) = %q, want %q", c.in, got, c.want)
+		}
+	}
 }
 
 func TestTruncate(t *testing.T) {

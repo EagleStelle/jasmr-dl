@@ -53,14 +53,13 @@ type Downloader struct {
 	chunks int
 	budget *semaphore.Weighted
 
+	// OnStart opens a line; total is 0 when the size is not known yet, which
+	// is every HLS job, since a playlist gives no byte total up front.
 	OnStart    func(name string, total int64)
 	OnProgress ProgressFunc
 
 	// OnCoverError reports art that could not be attached; the audio is fine.
 	OnCoverError func(name string, err error)
-
-	// OnStartCount counts segments; an HLS byte total needs a request each.
-	OnStartCount func(name string, total int64)
 }
 
 // Download fetches one job, resuming a partial file if one is present. It

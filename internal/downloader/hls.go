@@ -178,43 +178,44 @@ func (d *Downloader) fetchSegments(ctx context.Context, job Job, segments []stri
 		paths[i] = filepath.Join(dir, fmt.Sprintf("%06d.ts", i))
 	}
 
-	total := int64(len(segments))
-	if d.OnStartCount != nil {
-		d.OnStartCount(label, total)
+	// A playlist carries no byte total, and asking costs a request per segment,
+	// so the segments already written supply it.
+	sizes := &segmentSizes{count: int64(len(segments))}
+	if d.OnStart != nil {
+		d.OnStart(label, 0) // unknown until the first segment lands
 	}
-
-	var (
-		mu   sync.Mutex
-		done int64
-	)
-	progress := func() {
-		mu.Lock()
-		done++
-		n := done
-		mu.Unlock()
+	report := func() {
 		if d.OnProgress != nil {
-			d.OnProgress(label, n, total)
+			done, total := sizes.stat()
+			d.OnProgress(label, done, total)
 		}
 	}
+	report()
 
 	g, gctx := errgroup.WithContext(ctx)
 	// The connection budget bounds requests; this bounds goroutines.
 	g.SetLimit(maxSegmentWorkers)
 	for i, target := range segments {
 		g.Go(func() error {
-			if fileSize(paths[i]) > 0 {
-				progress()
+			if have := fileSize(paths[i]); have > 0 {
+				sizes.advance(have)
+				sizes.finish(have)
+				report()
 				return nil
 			}
 			if err := d.acquire(gctx); err != nil {
 				return err
 			}
-			err := d.fetchSegment(gctx, target, job.Referer, paths[i])
+			written, err := d.fetchSegment(gctx, target, job.Referer, paths[i], func(n int) {
+				sizes.advance(int64(n))
+				report()
+			})
 			d.release()
 			if err != nil {
 				return fmt.Errorf("segment %d: %w", i, err)
 			}
-			progress()
+			sizes.finish(written)
+			report()
 			return nil
 		})
 	}
@@ -224,45 +225,91 @@ func (d *Downloader) fetchSegments(ctx context.Context, job Job, segments []stri
 	return paths, nil
 }
 
-// fetchSegment stages through .part so a partial never looks finished.
-func (d *Downloader) fetchSegment(ctx context.Context, target, referer, path string) error {
+// fetchSegment stages through .part so a partial never looks finished. It
+// reports each write to add and returns the segment's size.
+func (d *Downloader) fetchSegment(ctx context.Context, target, referer, path string, add func(n int)) (int64, error) {
 	resp, err := d.getOK(ctx, target, referer)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer resp.Body.Close()
 
 	part := path + ".part"
 	f, err := os.Create(part)
 	if err != nil {
-		return permanent(err)
+		return 0, permanent(err)
 	}
 
 	head := make([]byte, 1)
 	if _, err := io.ReadFull(resp.Body, head); err != nil {
 		f.Close()
 		os.Remove(part)
-		return fmt.Errorf("empty segment %s: %w", target, err)
+		return 0, fmt.Errorf("empty segment %s: %w", target, err)
 	}
 	if head[0] != tsSync {
 		f.Close()
 		os.Remove(part)
-		return permanent(fmt.Errorf("%s is not MPEG-TS", target))
+		return 0, permanent(fmt.Errorf("%s is not MPEG-TS", target))
 	}
 
-	_, writeErr := f.Write(head)
+	w := d.tee(f, add)
+	n, writeErr := w.Write(head)
+	written := int64(n)
 	if writeErr == nil {
-		_, writeErr = io.Copy(f, resp.Body)
+		var copied int64
+		copied, writeErr = io.Copy(w, resp.Body)
+		written += copied
 	}
 	closeErr := f.Close()
 
 	switch {
 	case writeErr != nil:
-		return writeErr
+		return 0, writeErr
 	case closeErr != nil:
-		return closeErr
+		return 0, closeErr
 	}
-	return os.Rename(part, path)
+	if err := os.Rename(part, path); err != nil {
+		return 0, err
+	}
+	return written, nil
+}
+
+// segmentSizes projects a playlist's byte total from the segments already
+// written. Segments run to a near-uniform length, so the mean of the finished
+// ones across the count is within a few percent, and exact once the last lands.
+type segmentSizes struct {
+	mu    sync.Mutex
+	count int64 // segments the playlist lists
+	done  int64 // segments fully written
+	whole int64 // bytes those finished segments hold
+	bytes int64 // bytes on disk, segments in flight included
+}
+
+// advance records bytes written, whether or not their segment is finished.
+func (s *segmentSizes) advance(n int64) {
+	s.mu.Lock()
+	s.bytes += n
+	s.mu.Unlock()
+}
+
+func (s *segmentSizes) finish(size int64) {
+	s.mu.Lock()
+	s.whole += size
+	s.done++
+	s.mu.Unlock()
+}
+
+// stat returns the bytes on disk and the projected total, 0 until the first
+// segment finishes.
+func (s *segmentSizes) stat() (done, total int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.done == 0 {
+		return s.bytes, 0
+	}
+	total = max(s.whole*s.count/s.done, s.bytes) // never under what is on disk
+	return s.bytes, total
 }
 
 // remux concatenates the segments; 2000-odd paths need a list file.

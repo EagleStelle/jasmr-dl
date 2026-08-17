@@ -101,7 +101,6 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		OnCoverError: func(name string, err error) { cmd.PrintErrf("[warn] %s: %v\n", name, err) },
 		OnStart:      prog.Start,
 		OnProgress:   prog.Update,
-		OnStartCount: prog.StartCount,
 	}
 
 	debugf(cmd, "%d files at once, %d retries per file", concurrency, retries)
