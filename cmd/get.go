@@ -38,10 +38,8 @@ func runGet(cmd *cobra.Command, args []string) error {
 	defer stop()
 
 	sc := scraper.New(downloader.NewClient(), userAgent)
-	if verbose {
-		cmd.Printf("fetching %s\n", target)
-		cmd.Printf("(two requests, spaced by the %s robots.txt crawl delay)\n", scraper.PoliteDelay)
-	}
+	cmd.Printf("[info] fetching %s\n", target)
+	debugf(cmd, "two requests, spaced by the %s robots.txt crawl delay", scraper.PoliteDelay)
 
 	album, err := sc.Album(ctx, target.String())
 	if err != nil {
@@ -53,106 +51,87 @@ func runGet(cmd *cobra.Command, args []string) error {
 	// Not every listing carries a whole-work file. Falling back beats
 	// exiting with nothing when the default mode finds none.
 	if len(tracks) == 0 && m == scraper.ModeCombined {
-		cmd.PrintErrln("no combined file in this listing; downloading the split tracks instead")
+		cmd.PrintErrln("[warn] no combined file in this listing, falling back to split tracks")
 		m = scraper.ModeSplit
 		tracks = album.Select(m)
 	}
 
-	printAlbum(cmd, album, tracks, m)
+	cmd.Printf("[info] %d of %s selected\n", len(tracks), plural(len(album.Tracks), "file"))
+	debugf(cmd, "cover: %s", orNone(album.CoverURL))
+	for _, t := range tracks {
+		debugf(cmd, "%s: %s", t.Title, t.LinkURL)
+	}
 
 	if len(tracks) == 0 {
-		return fmt.Errorf("nothing to download in mode %d (%s)", mode, m)
+		return fmt.Errorf("no files to download in mode %d (%s)", mode, m)
 	}
 
 	dir := outputDirFor(album.Title)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
+	cmd.Printf("[info] saving to %s\n", dir)
 
 	jobs := make([]downloader.Job, 0, len(tracks))
 	for _, t := range tracks {
 		jobs = append(jobs, downloader.Job{Name: t.Title, LinkURL: t.LinkURL})
 	}
 
-	bars := downloader.NewBarSet(cmd.OutOrStdout())
+	prog := downloader.NewProgress(cmd.OutOrStdout())
 	d := &downloader.Downloader{
 		Client:     downloader.NewClient(),
 		UserAgent:  userAgent,
 		OutputDir:  dir,
 		Retries:    retries,
-		OnStart:    bars.Start,
-		OnProgress: bars.Update,
+		OnStart:    prog.Start,
+		OnProgress: prog.Update,
 	}
 
-	cmd.Printf("\ndownloading %d file(s) into %s with concurrency %d\n\n", len(jobs), dir, concurrency)
+	debugf(cmd, "concurrency %d, %d retries per file", concurrency, retries)
 	results := d.Run(ctx, jobs, concurrency)
 
 	// Drain the renderer before printing the summary, or the two fight over
 	// the same lines.
-	bars.Wait()
+	prog.Wait()
 
 	return report(cmd, results)
 }
 
-// report prints a per-file summary and fails only if every file failed.
+// report lists the failures and returns an error only if every file failed.
 func report(cmd *cobra.Command, results []downloader.Result) error {
 	var failed int
-	cmd.Println()
 	for _, r := range results {
 		if r.Err != nil {
 			failed++
-			cmd.PrintErrf("  ✗ %s: %v\n", r.Job.Name, r.Err)
-			continue
+			cmd.PrintErrf("[error] %s: %v\n", r.Job.Name, r.Err)
 		}
-		cmd.Printf("  ✓ %s\n", filepath.Base(r.Path))
 	}
 
 	switch {
-	case failed == 0:
-		cmd.Printf("\ndone: %d file(s)\n", len(results))
-		return nil
 	case failed == len(results):
-		return fmt.Errorf("all %d download(s) failed", failed)
+		return fmt.Errorf("all %s failed", plural(failed, "download"))
+	case failed > 0:
+		cmd.Printf("[done] %d of %s\n", len(results)-failed, plural(len(results), "file"))
 	default:
-		cmd.Printf("\ndone: %d ok, %d failed\n", len(results)-failed, failed)
-		return nil
+		cmd.Printf("[done] %s\n", plural(len(results), "file"))
+	}
+	return nil
+}
+
+// debugf writes a line only under --verbose. It goes to stderr so that piping
+// stdout stays clean.
+func debugf(cmd *cobra.Command, format string, args ...any) {
+	if verbose {
+		cmd.PrintErrf("[debug] "+format+"\n", args...)
 	}
 }
 
-func humanSize(n int64) string {
-	if n < 0 {
-		return "unknown size"
+// plural renders a count with its noun, so no line has to say "file(s)".
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
 	}
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit; m /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGT"[exp])
-}
-
-func printAlbum(cmd *cobra.Command, a *scraper.Album, tracks []scraper.Track, m scraper.Mode) {
-	cmd.Printf("\ntitle:  %s\n", a.Title)
-	cmd.Printf("rj:     %s\n", a.RJCode)
-	cmd.Printf("cover:  %s\n", orNone(a.CoverURL))
-	cmd.Printf("output: %s\n", outputDirFor(a.Title))
-	cmd.Printf("mode:   %d (%s)\n", m, m)
-
-	cmd.Printf("\nselected %d of %d listed file(s)\n", len(tracks), len(a.Tracks))
-	for _, t := range tracks {
-		label := fmt.Sprintf("%02d", t.Index)
-		if t.Combined {
-			label = "──"
-		}
-		cmd.Printf("  [%s] %s\n", label, t.Title)
-		if verbose {
-			cmd.Printf("       %s\n", t.LinkURL)
-		}
-	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 // parseAlbumURL rejects anything that is not an http(s) URL on the target host.

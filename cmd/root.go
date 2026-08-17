@@ -44,7 +44,7 @@ var rootCmd = &cobra.Command{
 // Execute runs the CLI and exits non-zero on failure.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		fmt.Fprintln(os.Stderr, "[error]", err)
 		os.Exit(1)
 	}
 }

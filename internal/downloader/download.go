@@ -29,11 +29,11 @@ type ProgressFunc func(name string, done, total int64)
 
 // Downloader fetches jobs into OutputDir.
 type Downloader struct {
-	Client    *http.Client
-	UserAgent string
-	OutputDir string
-	Retries   int
-	OnStart   func(name string, total int64)
+	Client     *http.Client
+	UserAgent  string
+	OutputDir  string
+	Retries    int
+	OnStart    func(name string, total int64)
 	OnProgress ProgressFunc
 }
 
@@ -64,7 +64,7 @@ func (d *Downloader) Download(ctx context.Context, job Job) (string, error) {
 		}
 		lastErr = err
 	}
-	return "", fmt.Errorf("gave up after %d attempts: %w", d.Retries+1, lastErr)
+	return "", fmt.Errorf("after %d attempts: %w", d.Retries+1, lastErr)
 }
 
 // attempt runs the full resolve-and-transfer cycle once. Resolution happens
@@ -80,7 +80,7 @@ func (d *Downloader) attempt(ctx context.Context, job Job) (string, error) {
 	if err != nil {
 		return "", permanent(err)
 	}
-	req.Header.Set("User-Agent", d.UserAgent)
+	setNavigation(req, d.UserAgent, "same-origin")
 	req.Header.Set("Referer", res.Referer)
 
 	// Probe for an existing part file before choosing a filename: the part
@@ -124,7 +124,7 @@ func (d *Downloader) rangedGet(ctx context.Context, res *Resolved, from int64) (
 	if err != nil {
 		return nil, permanent(err)
 	}
-	req.Header.Set("User-Agent", d.UserAgent)
+	setNavigation(req, d.UserAgent, "same-origin")
 	req.Header.Set("Referer", res.Referer)
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-", from))
 

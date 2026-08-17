@@ -51,7 +51,7 @@ func Resolve(ctx context.Context, client *http.Client, userAgent, linkURL string
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", userAgent)
+	setScriptFetch(req, userAgent)
 	req.Header.Set("Referer", landing.String())
 	req.Header.Set("HX-Request", "true") // omit this and the HTML comes back instead
 
@@ -115,11 +115,12 @@ func fetchDoc(ctx context.Context, client *http.Client, userAgent, target, refer
 	if err != nil {
 		return nil, nil, err
 	}
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	site := "cross-site"
 	if referer != "" {
 		req.Header.Set("Referer", referer)
+		site = "same-origin"
 	}
+	setNavigation(req, userAgent, site)
 
 	resp, err := client.Do(req)
 	if err != nil {
