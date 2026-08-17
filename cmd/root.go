@@ -22,11 +22,13 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "jasmr-dl [url]",
+	Use:   "jasmr-dl <url>",
 	Short: "Download audio albums from japaneseasmr.com",
 	Long: "jasmr-dl downloads every track on a japaneseasmr.com album page,\n" +
-		"concurrently, with resume and retry.\n\n" +
-		"A bare URL is shorthand for the get subcommand.",
+		"concurrently, with resume and retry.",
+	Example: "  jasmr-dl https://japaneseasmr.com/12345/\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ -o ./out -c 4\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ --combined",
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {

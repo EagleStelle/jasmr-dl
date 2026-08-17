@@ -17,17 +17,6 @@ import (
 
 const targetHost = "japaneseasmr.com"
 
-var getCmd = &cobra.Command{
-	Use:   "get <url>",
-	Short: "Download every track from a japaneseasmr.com album page",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runGet,
-}
-
-func init() {
-	rootCmd.AddCommand(getCmd)
-}
-
 func runGet(cmd *cobra.Command, args []string) error {
 	target, err := parseAlbumURL(args[0])
 	if err != nil {
