@@ -18,6 +18,9 @@ type Album struct {
 	Title    string
 	CoverURL string
 	Artists  string
+	Circle   string
+	RJCode   string
+	Date     string
 	Tracks   []Track
 
 	// Chapters is present only where one stream holds the whole work.
@@ -29,12 +32,13 @@ type Track struct {
 	// Title is the sanitized URL basename, used only if the host names nothing.
 	Title string
 
+	// Name labels the part within the post ("Track 1", "Omake"), if any.
+	Name    string
 	LinkURL string
 
 	// Other encodings, in page order. Pages advertise ones never uploaded.
 	Alternates []string
-
-	Source Source
+	Source     Source
 }
 
 // Chapter marks where a track begins inside a stream.

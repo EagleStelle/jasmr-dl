@@ -8,12 +8,15 @@ import (
 	"strconv"
 )
 
-// Tags is metadata written to every finished file.
+// Tags is metadata written to one finished file.
 type Tags struct {
-	Title   string
-	Artist  string
-	Album   string
-	Comment string
+	Title       string
+	Artist      string
+	AlbumArtist string
+	Album       string
+	Date        string
+	Genre       string
+	Comment     string
 }
 
 func (t Tags) args() []string {
@@ -21,7 +24,10 @@ func (t Tags) args() []string {
 	for _, kv := range [][2]string{
 		{"title", t.Title},
 		{"artist", t.Artist},
+		{"album_artist", t.AlbumArtist},
 		{"album", t.Album},
+		{"date", t.Date},
+		{"genre", t.Genre},
 		{"comment", t.Comment},
 	} {
 		if kv[1] != "" {
@@ -34,7 +40,7 @@ func (t Tags) args() []string {
 // tagging returns the extra ffmpeg inputs for art and chapters, plus the map,
 // codec and metadata options that go after them. next is the first free input
 // index, the primary audio being input 0.
-func (d *Downloader) tagging(next int, muxer, chapMeta string) (inputs, opts []string) {
+func (d *Downloader) tagging(tags Tags, next int, muxer, chapMeta string) (inputs, opts []string) {
 	opts = []string{"-map", "0:a"}
 
 	if d.CoverPath != "" {
@@ -57,22 +63,23 @@ func (d *Downloader) tagging(next int, muxer, chapMeta string) (inputs, opts []s
 			"-metadata:s:v", "comment=Cover (front)",
 		)
 	}
-	opts = append(opts, d.Tags.args()...)
+	opts = append(opts, tags.args()...)
 	if muxer == "mp3" {
-		opts = append(opts, "-id3v2_version", "3")
+		// v2.3 would split the date across TYER and TDAT instead of TDRC.
+		opts = append(opts, "-id3v2_version", "4")
 	}
 	return inputs, opts
 }
 
 // nothingToTag reports whether a file would be rewritten for no reason.
-func (d *Downloader) nothingToTag() bool {
-	return d.CoverPath == "" && len(d.Chapters) == 0 && d.Tags == (Tags{})
+func (d *Downloader) nothingToTag(tags Tags) bool {
+	return d.CoverPath == "" && len(d.Chapters) == 0 && tags == (Tags{})
 }
 
 // tag attaches art, chapters and metadata to a finished file, rewriting it.
-func (d *Downloader) tag(ctx context.Context, audio string) error {
+func (d *Downloader) tag(ctx context.Context, tags Tags, audio string) error {
 	muxer, ok := coverMuxers[extOf(audio)]
-	if !ok || d.nothingToTag() {
+	if !ok || d.nothingToTag(tags) {
 		return nil
 	}
 	tools, err := findFFmpeg()
@@ -94,7 +101,7 @@ func (d *Downloader) tag(ctx context.Context, audio string) error {
 		defer os.Remove(chapMeta)
 	}
 
-	inputs, opts := d.tagging(1, muxer, chapMeta)
+	inputs, opts := d.tagging(tags, 1, muxer, chapMeta)
 
 	// The suffix hides the extension ffmpeg would infer the format from.
 	staged := audio + ".tagged"

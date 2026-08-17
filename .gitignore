@@ -24,6 +24,7 @@ go.work.sum
 *.m4a
 *.flac
 *.part
+*.part.*
 
 # Credentials
 cookies.txt

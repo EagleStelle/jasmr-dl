@@ -30,6 +30,8 @@ type Job struct {
 
 	// The media host answers 403 without it.
 	Referer string
+
+	Tags Tags
 }
 
 // ProgressFunc reports transfer progress. total is -1 when unknown.
@@ -46,8 +48,6 @@ type Downloader struct {
 
 	// Chapters only mean anything when one file holds the whole work.
 	Chapters []scraper.Chapter
-
-	Tags Tags
 
 	// Ranged chunks per file. Run derives it from the files in flight.
 	chunks int
@@ -160,12 +160,12 @@ func (d *Downloader) attempt(ctx context.Context, job Job) (string, error) {
 				held = true
 				// The host advertises ranges without honoring them: one
 				// stream from the start is all it will serve.
-				return d.transfer(ctx, res, 0, name, final, part)
+				return d.transfer(ctx, job, res, 0, name, final, part)
 			}
 			if err != nil {
 				return "", err
 			}
-			return d.embedded(ctx, path)
+			return d.embedded(ctx, job, path)
 		}
 	}
 
@@ -173,36 +173,36 @@ func (d *Downloader) attempt(ctx context.Context, job Job) (string, error) {
 	// response is discarded; it only existed to learn the name and size.
 	if have := fileSize(part); have > 0 {
 		resp.Body.Close()
-		return d.transfer(ctx, res, have, name, final, part)
+		return d.transfer(ctx, job, res, have, name, final, part)
 	}
 	defer resp.Body.Close()
 
-	return d.store(ctx, resp, name, final, part)
+	return d.store(ctx, job, resp, name, final, part)
 }
 
 // transfer runs one ranged request from byte from, then writes what it answers.
-func (d *Downloader) transfer(ctx context.Context, res *Resolved, from int64, name, final, part string) (string, error) {
+func (d *Downloader) transfer(ctx context.Context, job Job, res *Resolved, from int64, name, final, part string) (string, error) {
 	resp, err := d.rangedGet(ctx, res, from)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
-	return d.store(ctx, resp, name, final, part)
+	return d.store(ctx, job, resp, name, final, part)
 }
 
 // store writes a response to disk and tags the finished file.
-func (d *Downloader) store(ctx context.Context, resp *http.Response, name, final, part string) (string, error) {
+func (d *Downloader) store(ctx context.Context, job Job, resp *http.Response, name, final, part string) (string, error) {
 	path, err := d.writeBody(ctx, resp, name, final, part)
 	if err != nil {
 		return "", err
 	}
-	return d.embedded(ctx, path)
+	return d.embedded(ctx, job, path)
 }
 
 // embedded attaches art and chapters. Failure is non-fatal: the audio is fine.
-func (d *Downloader) embedded(ctx context.Context, path string) (string, error) {
-	if err := d.tag(ctx, path); err != nil {
+func (d *Downloader) embedded(ctx context.Context, job Job, path string) (string, error) {
+	if err := d.tag(ctx, job.Tags, path); err != nil {
 		if d.OnCoverError != nil {
 			d.OnCoverError(filepath.Base(path), err)
 		}

@@ -31,6 +31,7 @@ func directTracks(doc *goquery.Document, base *url.URL) []Track {
 			seen[audio[0]] = true
 			files = append(files, Track{
 				Title:      util.Sanitize(util.URLBase(audio[0])),
+				Name:       partName(sel, audio[0]),
 				LinkURL:    audio[0],
 				Alternates: audio[1:],
 				Source:     SourceDirect,
@@ -43,6 +44,7 @@ func directTracks(doc *goquery.Document, base *url.URL) []Track {
 			playlists = append(playlists, Track{
 				// The remux picks the container.
 				Title:   util.Sanitize(strings.TrimSuffix(util.URLBase(playlist[0]), playlistExt)),
+				Name:    partName(sel, playlist[0]),
 				LinkURL: playlist[0],
 				Source:  SourceHLS,
 			})
@@ -53,6 +55,18 @@ func directTracks(doc *goquery.Document, base *url.URL) []Track {
 		return files
 	}
 	return playlists
+}
+
+// partName reads a player's label ("Track 1", "Omake"). A label repeating the
+// file's own RJ code names nothing.
+func partName(sel *goquery.Selection, link string) string {
+	name := strings.TrimSpace(sel.AttrOr("title", ""))
+	base := util.URLBase(link)
+	stem := strings.TrimSuffix(base, path.Ext(base))
+	if name == "" || strings.EqualFold(name, base) || strings.EqualFold(name, stem) {
+		return ""
+	}
+	return name
 }
 
 // mediaCandidates splits a player's sources into files and playlists.

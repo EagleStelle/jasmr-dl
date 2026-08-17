@@ -72,7 +72,7 @@ func (d *Downloader) assembleHLS(ctx context.Context, job Job) (string, error) {
 
 	// Tag from the finished file: chapter ends need its real length, and the
 	// nominal EXTINF sum overshoots it.
-	return d.embedded(ctx, final)
+	return d.embedded(ctx, job, final)
 }
 
 // fetchPlaylist follows one variant level if given a master playlist.

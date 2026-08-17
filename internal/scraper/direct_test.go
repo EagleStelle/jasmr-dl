@@ -71,6 +71,11 @@ func TestDirectTracksDedupesPlayersAndKeepsAlternates(t *testing.T) {
 	if tracks[0].Title != "RJ282759.mp3" {
 		t.Errorf("title = %q, want the host's own RJ name", tracks[0].Title)
 	}
+	for i, want := range []string{"Track 1", "Track 2"} {
+		if tracks[i].Name != want {
+			t.Errorf("track %d Name = %q, want %q", i, tracks[i].Name, want)
+		}
+	}
 }
 
 func TestDirectTracksSinglePlayer(t *testing.T) {
@@ -100,6 +105,10 @@ func TestDirectTracksFallsToPlaylistOnly(t *testing.T) {
 	// The remux picks the container, so the name carries no extension.
 	if tracks[0].Title != "RJ01632730" {
 		t.Errorf("title = %q, want the playlist stem", tracks[0].Title)
+	}
+	// The player's label is the RJ code the file already carries.
+	if tracks[0].Name != "" {
+		t.Errorf("Name = %q, want none", tracks[0].Name)
 	}
 }
 
