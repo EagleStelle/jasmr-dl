@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
@@ -18,7 +19,7 @@ import (
 
 const targetHost = "japaneseasmr.com"
 
-func runGet(cmd *cobra.Command, args []string) error {
+func runDownload(cmd *cobra.Command, args []string) error {
 	target, err := parseAlbumURL(args[0])
 	if err != nil {
 		return err
@@ -34,7 +35,10 @@ func runGet(cmd *cobra.Command, args []string) error {
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
 	defer stop()
 
-	sc := scraper.New(downloader.NewClient(), userAgent)
+	// One client for the run: its connection pool is what keeps sockets warm
+	// across the page fetch, the cover and every track.
+	client := downloader.NewClient()
+	sc := scraper.New(client, userAgent)
 	cmd.Printf("[info] fetching %s\n", target)
 
 	album, err := sc.Album(ctx, target.String())
@@ -69,12 +73,12 @@ func runGet(cmd *cobra.Command, args []string) error {
 
 	prog := downloader.NewProgress(cmd.OutOrStdout())
 	d := &downloader.Downloader{
-		Client:       downloader.NewClient(),
+		Client:       client,
 		UserAgent:    userAgent,
 		OutputDir:    dir,
 		Retries:      retries,
 		FFmpeg:       ffmpegPath,
-		CoverPath:    fetchCover(ctx, cmd, album, dir),
+		CoverPath:    fetchCover(ctx, cmd, client, album, dir),
 		Chapters:     chaptersFor(cmd, album),
 		Tags:         tagsFor(album),
 		OnCoverError: func(name string, err error) { cmd.PrintErrf("[warn] %s: %v\n", name, err) },
@@ -118,11 +122,11 @@ func chaptersFor(cmd *cobra.Command, album *scraper.Album) []scraper.Chapter {
 }
 
 // fetchCover is best-effort: missing art must not stop a download.
-func fetchCover(ctx context.Context, cmd *cobra.Command, album *scraper.Album, dir string) string {
+func fetchCover(ctx context.Context, cmd *cobra.Command, client *http.Client, album *scraper.Album, dir string) string {
 	if noCover || album.CoverURL == "" {
 		return ""
 	}
-	path, err := downloader.FetchCover(ctx, downloader.NewClient(), userAgent, album.CoverURL, album.PageURL, dir)
+	path, err := downloader.FetchCover(ctx, client, userAgent, album.CoverURL, album.PageURL, dir)
 	if err != nil {
 		cmd.PrintErrf("[warn] no cover art: %v\n", err)
 		return ""

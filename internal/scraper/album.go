@@ -12,22 +12,10 @@ const (
 	SourceHLS
 )
 
-func (s Source) String() string {
-	switch s {
-	case SourceDirect:
-		return "direct"
-	case SourceHLS:
-		return "hls"
-	default:
-		return "unknown"
-	}
-}
-
 // Album is everything a japaneseasmr.com post page yields.
 type Album struct {
 	PageURL  string
 	Title    string
-	RJCode   string
 	CoverURL string
 	Artists  string
 	Tracks   []Track

@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -34,11 +34,6 @@ const (
 	hlsOutputFormat = "ipod"
 )
 
-// playlist is a parsed HLS media playlist.
-type playlist struct {
-	segments []string
-}
-
 // assembleHLS rebuilds a work from its segments, kept until the remux succeeds.
 func (d *Downloader) assembleHLS(ctx context.Context, job Job) (string, error) {
 	// Before fetching anything: failing after 160 MB is no use.
@@ -56,7 +51,7 @@ func (d *Downloader) assembleHLS(ctx context.Context, job Job) (string, error) {
 		return final, nil
 	}
 
-	pl, err := d.fetchPlaylist(ctx, job.LinkURL, job.Referer)
+	segments, err := d.fetchPlaylist(ctx, job.LinkURL, job.Referer)
 	if err != nil {
 		return "", err
 	}
@@ -66,7 +61,7 @@ func (d *Downloader) assembleHLS(ctx context.Context, job Job) (string, error) {
 		return "", permanent(err)
 	}
 
-	paths, err := d.fetchSegments(ctx, job, pl, segDir, name)
+	paths, err := d.fetchSegments(ctx, job, segments, segDir, name)
 	if err != nil {
 		return "", err
 	}
@@ -95,7 +90,7 @@ func (d *Downloader) ffmpegPath() (string, error) {
 }
 
 // fetchPlaylist follows one variant level if given a master playlist.
-func (d *Downloader) fetchPlaylist(ctx context.Context, target, referer string) (*playlist, error) {
+func (d *Downloader) fetchPlaylist(ctx context.Context, target, referer string) ([]string, error) {
 	body, base, err := d.getText(ctx, target, referer)
 	if err != nil {
 		return nil, err
@@ -111,22 +106,12 @@ func (d *Downloader) fetchPlaylist(ctx context.Context, target, referer string) 
 }
 
 func (d *Downloader) getText(ctx context.Context, target, referer string) (string, *url.URL, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return "", nil, permanent(err)
-	}
-	setMediaFetch(req, d.UserAgent)
-	req.Header.Set("Referer", referer)
-
-	resp, err := d.Client.Do(req)
+	resp, err := d.getOK(ctx, target, referer)
 	if err != nil {
 		return "", nil, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return "", nil, fmt.Errorf("GET %s: %s", target, resp.Status)
-	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return "", nil, err
@@ -144,7 +129,7 @@ func firstVariant(body string, base *url.URL) (string, bool) {
 			pending = true
 		case line == "" || strings.HasPrefix(line, "#"):
 		case pending:
-			if abs := resolveRef(base, line); abs != "" {
+			if abs := util.ResolveURL(base, line); abs != "" {
 				return abs, true
 			}
 			pending = false
@@ -154,10 +139,10 @@ func firstVariant(body string, base *url.URL) (string, bool) {
 }
 
 // parsePlaylist reads segment URIs. Page-supplied, so off-host ones are refused.
-func parsePlaylist(body string, base *url.URL) (*playlist, error) {
+func parsePlaylist(body string, base *url.URL) ([]string, error) {
 	var (
-		pl      playlist
-		endList bool
+		segments []string
+		endList  bool
 	)
 
 	sc := bufio.NewScanner(strings.NewReader(body))
@@ -174,40 +159,40 @@ func parsePlaylist(body string, base *url.URL) (*playlist, error) {
 			endList = true
 		case strings.HasPrefix(line, "#"):
 		default:
-			abs := resolveRef(base, line)
+			abs := util.ResolveURL(base, line)
 			if abs == "" {
 				return nil, permanent(fmt.Errorf("bad segment URI %q", line))
 			}
 			if !strings.EqualFold(hostOf(abs), base.Hostname()) {
 				return nil, permanent(fmt.Errorf("segment %s is off the playlist's host", abs))
 			}
-			if len(pl.segments) >= maxSegments {
+			if len(segments) >= maxSegments {
 				return nil, permanent(fmt.Errorf("playlist exceeds %d segments", maxSegments))
 			}
-			pl.segments = append(pl.segments, abs)
+			segments = append(segments, abs)
 		}
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
 
-	if len(pl.segments) == 0 {
+	if len(segments) == 0 {
 		return nil, permanent(errors.New("playlist lists no segments"))
 	}
 	if !endList {
 		return nil, permanent(errors.New("playlist is live, with no fixed end"))
 	}
-	return &pl, nil
+	return segments, nil
 }
 
 // fetchSegments downloads into dir in playlist order, skipping what is there.
-func (d *Downloader) fetchSegments(ctx context.Context, job Job, pl *playlist, dir, label string) ([]string, error) {
-	paths := make([]string, len(pl.segments))
-	for i := range pl.segments {
+func (d *Downloader) fetchSegments(ctx context.Context, job Job, segments []string, dir, label string) ([]string, error) {
+	paths := make([]string, len(segments))
+	for i := range segments {
 		paths[i] = filepath.Join(dir, fmt.Sprintf("%06d.ts", i))
 	}
 
-	total := int64(len(pl.segments))
+	total := int64(len(segments))
 	if d.OnStartCount != nil {
 		d.OnStartCount(label, total)
 	}
@@ -229,9 +214,9 @@ func (d *Downloader) fetchSegments(ctx context.Context, job Job, pl *playlist, d
 	g, gctx := errgroup.WithContext(ctx)
 	// The connection budget bounds requests; this bounds goroutines.
 	g.SetLimit(maxSegmentWorkers)
-	for i, target := range pl.segments {
+	for i, target := range segments {
 		g.Go(func() error {
-			if fi, err := os.Stat(paths[i]); err == nil && fi.Size() > 0 {
+			if fileSize(paths[i]) > 0 {
 				progress()
 				return nil
 			}
@@ -255,22 +240,11 @@ func (d *Downloader) fetchSegments(ctx context.Context, job Job, pl *playlist, d
 
 // fetchSegment stages through .part so a partial never looks finished.
 func (d *Downloader) fetchSegment(ctx context.Context, target, referer, path string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return permanent(err)
-	}
-	setMediaFetch(req, d.UserAgent)
-	req.Header.Set("Referer", referer)
-
-	resp, err := d.Client.Do(req)
+	resp, err := d.getOK(ctx, target, referer)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %s", target, resp.Status)
-	}
 
 	part := path + ".part"
 	f, err := os.Create(part)
@@ -319,12 +293,11 @@ func (d *Downloader) remux(ctx context.Context, ffmpeg, dir string, paths []stri
 
 	staged := final + ".part"
 	// The .part suffix hides the extension ffmpeg infers the format from.
-	out, err := runFFmpeg(ctx, ffmpeg, []string{
-		"-nostdin", "-loglevel", "error", "-y",
+	out, err := runFFmpeg(ctx, ffmpeg, slices.Concat(ffmpegQuiet, []string{
 		"-f", "concat", "-safe", "0", "-i", list,
 		"-c", "copy", "-movflags", "+faststart",
 		"-f", hlsOutputFormat, staged,
-	})
+	})...)
 	if err != nil {
 		os.Remove(staged)
 		return fmt.Errorf("ffmpeg: %w: %s", err, out)
@@ -332,8 +305,12 @@ func (d *Downloader) remux(ctx context.Context, ffmpeg, dir string, paths []stri
 	return os.Rename(staged, final)
 }
 
-// runFFmpeg returns combined output, where both binaries put anything useful.
-func runFFmpeg(ctx context.Context, bin string, args []string) (string, error) {
+// ffmpegQuiet suppresses the banner and never stops on a prompt. Every call to
+// either binary starts with it.
+var ffmpegQuiet = []string{"-nostdin", "-loglevel", "error", "-y"}
+
+// runFFmpeg returns combined output, where ffmpeg puts anything useful.
+func runFFmpeg(ctx context.Context, bin string, args ...string) (string, error) {
 	out, err := exec.CommandContext(ctx, bin, args...).CombinedOutput()
 	if err != nil && ctx.Err() != nil {
 		return "", ctx.Err()
@@ -343,7 +320,7 @@ func runFFmpeg(ctx context.Context, bin string, args []string) (string, error) {
 
 // runProbe reads stdout only, so a warning on stderr cannot corrupt a value
 // being parsed out of it.
-func runProbe(ctx context.Context, bin string, args []string) (string, error) {
+func runProbe(ctx context.Context, bin string, args ...string) (string, error) {
 	out, err := exec.CommandContext(ctx, bin, args...).Output()
 	if err != nil && ctx.Err() != nil {
 		return "", ctx.Err()
@@ -351,25 +328,10 @@ func runProbe(ctx context.Context, bin string, args []string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-func dirOf(path string) string { return filepath.Dir(path) }
-
 func hostOf(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return ""
 	}
 	return u.Hostname()
-}
-
-// resolveRef makes a possibly-relative playlist reference absolute.
-func resolveRef(base *url.URL, ref string) string {
-	u, err := url.Parse(strings.TrimSpace(ref))
-	if err != nil {
-		return ""
-	}
-	abs := base.ResolveReference(u)
-	if abs.Scheme != "http" && abs.Scheme != "https" {
-		return ""
-	}
-	return abs.String()
 }

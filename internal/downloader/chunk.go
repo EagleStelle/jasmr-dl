@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 
 	"golang.org/x/sync/errgroup"
@@ -48,13 +49,7 @@ func planChunks(total int64, budget int) (chunkPlan, bool) {
 		return chunkPlan{}, false
 	}
 
-	n := int(total / minChunk)
-	if n > budget {
-		n = budget
-	}
-	if n > maxChunks {
-		n = maxChunks
-	}
+	n := min(int(total/minChunk), budget, maxChunks)
 	if n < 2 {
 		return chunkPlan{}, false
 	}
@@ -75,7 +70,7 @@ func planChunks(total int64, budget int) (chunkPlan, bool) {
 // chunked joins parallel ranged requests. Each chunk's part file length is its
 // own resume point.
 func (d *Downloader) chunked(ctx context.Context, res *Resolved, plan chunkPlan, name, final, part string) (string, error) {
-	if err := os.MkdirAll(dirOf(final), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(final), 0o755); err != nil {
 		return "", permanent(err)
 	}
 
@@ -139,11 +134,10 @@ func (d *Downloader) chunk(ctx context.Context, res *Resolved, path string, r [2
 	}
 	defer d.release()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, res.URL, nil)
+	req, err := d.mediaRequest(ctx, res.URL, res.Referer)
 	if err != nil {
-		return permanent(err)
+		return err
 	}
-	d.setTransfer(req, res)
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", r[0]+have, r[1]))
 
 	resp, err := d.Client.Do(req)
@@ -156,15 +150,8 @@ func (d *Downloader) chunk(ctx context.Context, res *Resolved, path string, r [2
 	case http.StatusPartialContent:
 	case http.StatusOK:
 		return permanent(errRangeIgnored)
-	case http.StatusForbidden, http.StatusUnauthorized:
-		return fmt.Errorf("%s: signed URL rejected, will re-resolve", resp.Status)
-	case http.StatusTooManyRequests, http.StatusServiceUnavailable:
-		return retryAfterError{status: resp.Status, wait: parseRetryAfter(resp.Header.Get("Retry-After"))}
 	default:
-		if resp.StatusCode >= 500 {
-			return fmt.Errorf("server error: %s", resp.Status)
-		}
-		return permanent(fmt.Errorf("unexpected status: %s", resp.Status))
+		return transferStatus(resp)
 	}
 
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -172,13 +159,9 @@ func (d *Downloader) chunk(ctx context.Context, res *Resolved, path string, r [2
 		return permanent(err)
 	}
 
-	var w io.Writer = f
-	if d.OnProgress != nil {
-		w = io.MultiWriter(f, writerFunc(func(p []byte) (int, error) {
-			d.OnProgress(name, done.Add(int64(len(p))), total)
-			return len(p), nil
-		}))
-	}
+	w := d.tee(f, func(n int) {
+		d.OnProgress(name, done.Add(int64(n)), total)
+	})
 
 	_, copyErr := io.Copy(w, io.LimitReader(resp.Body, want-have))
 	closeErr := f.Close()

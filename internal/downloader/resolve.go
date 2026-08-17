@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
+
+	"jasmr-dl/internal/util"
 )
 
 // Resolved is a URL that serves bytes, plus what must accompany it.
@@ -40,22 +41,20 @@ func (d *Downloader) pickEncoding(ctx context.Context, job Job) (*Resolved, erro
 	return nil, fmt.Errorf("the page offers no encoding this host has: %w", lastErr)
 }
 
+// urlName is the URL's own filename, or "" where the path carries none.
 func urlName(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return ""
+	if base := util.URLBase(raw); base != "" {
+		return util.Sanitize(base)
 	}
-	return clean(u.Path)
+	return ""
 }
 
 // probe asks for one byte to learn whether the host holds the URL.
 func (d *Downloader) probe(ctx context.Context, target, referer string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	req, err := d.mediaRequest(ctx, target, referer)
 	if err != nil {
 		return err
 	}
-	setMediaFetch(req, d.UserAgent)
-	req.Header.Set("Referer", referer)
 	req.Header.Set("Range", "bytes=0-0")
 
 	resp, err := d.Client.Do(req)
@@ -70,6 +69,6 @@ func (d *Downloader) probe(ctx context.Context, target, referer string) error {
 	case http.StatusOK, http.StatusPartialContent:
 		return nil
 	default:
-		return fmt.Errorf("GET %s: %s", target, resp.Status)
+		return badStatus(target, resp)
 	}
 }

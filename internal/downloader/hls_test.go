@@ -31,7 +31,7 @@ func TestParsePlaylistResolvesRelativeSegments(t *testing.T) {
 		"#EXT-X-ENDLIST",
 	}, "\n")
 
-	pl, err := parsePlaylist(body, mustURL(t, playlistBase))
+	segments, err := parsePlaylist(body, mustURL(t, playlistBase))
 	if err != nil {
 		t.Fatalf("parsePlaylist: %v", err)
 	}
@@ -40,12 +40,12 @@ func TestParsePlaylistResolvesRelativeSegments(t *testing.T) {
 		"https://v.example.xyz/RJ1/seg_000000.ts",
 		"https://v.example.xyz/RJ1/seg_000001.ts",
 	}
-	if len(pl.segments) != len(want) {
-		t.Fatalf("got %d segments, want %d", len(pl.segments), len(want))
+	if len(segments) != len(want) {
+		t.Fatalf("got %d segments, want %d", len(segments), len(want))
 	}
 	for i, w := range want {
-		if pl.segments[i] != w {
-			t.Errorf("segment %d = %q, want %q", i, pl.segments[i], w)
+		if segments[i] != w {
+			t.Errorf("segment %d = %q, want %q", i, segments[i], w)
 		}
 	}
 }

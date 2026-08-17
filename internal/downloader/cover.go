@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -24,14 +25,13 @@ var coverMuxers = map[string]string{
 
 // FetchCover saves album art into dir and returns its path.
 func FetchCover(ctx context.Context, client *http.Client, userAgent, coverURL, referer, dir string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, coverURL, nil)
+	req, err := newMediaRequest(ctx, coverURL, referer, userAgent)
 	if err != nil {
 		return "", err
 	}
-	setMediaFetch(req, userAgent)
+	// Art is an image, not the audio the shared headers ask for.
 	req.Header.Set("Accept", "image/jpeg,image/png,image/webp,image/*;q=0.8")
 	req.Header.Set("Sec-Fetch-Dest", "image")
-	req.Header.Set("Referer", referer)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -40,7 +40,7 @@ func FetchCover(ctx context.Context, client *http.Client, userAgent, coverURL, r
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GET %s: %s", coverURL, resp.Status)
+		return "", badStatus(coverURL, resp)
 	}
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxCoverBytes))
@@ -78,14 +78,9 @@ func imageExt(data []byte) string {
 
 // probeDuration reads a file's length, needed to close the last chapter.
 func (d *Downloader) probeDuration(ctx context.Context, audio string) (time.Duration, error) {
-	ffprobe, err := d.ffprobePath()
-	if err != nil {
-		return 0, err
-	}
-	out, err := runProbe(ctx, ffprobe, []string{
-		"-v", "error", "-show_entries", "format=duration",
-		"-of", "default=noprint_wrappers=1:nokey=1", audio,
-	})
+	out, err := d.ffprobe(ctx,
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1", audio)
 	if err != nil {
 		return 0, fmt.Errorf("probe duration: %w: %s", err, out)
 	}
@@ -98,19 +93,24 @@ func (d *Downloader) probeDuration(ctx context.Context, audio string) (time.Dura
 
 // hasCover stops a rerun re-downloading a tagged file, whose length changed.
 func (d *Downloader) hasCover(ctx context.Context, audio string) bool {
-	ffprobe, err := d.ffprobePath()
-	if err != nil {
-		return false
-	}
-	out, err := runFFmpeg(ctx, ffprobe, []string{
-		"-v", "error", "-select_streams", "v",
+	out, err := d.ffprobe(ctx,
+		"-select_streams", "v",
 		"-show_entries", "stream=codec_type",
-		"-of", "csv=p=0", audio,
-	})
+		"-of", "csv=p=0", audio)
 	if err != nil {
 		return false
 	}
 	return strings.Contains(out, "video")
+}
+
+// ffprobe reads one value out of a file. Errors are quiet: only the value the
+// caller asked for reaches stdout.
+func (d *Downloader) ffprobe(ctx context.Context, args ...string) (string, error) {
+	bin, err := d.ffprobePath()
+	if err != nil {
+		return "", err
+	}
+	return runProbe(ctx, bin, slices.Concat([]string{"-v", "error"}, args)...)
 }
 
 func (d *Downloader) ffprobePath() (string, error) {

@@ -26,7 +26,6 @@ func (d *Downloader) Run(ctx context.Context, jobs []Job, concurrency int) []Res
 		concurrency = len(jobs)
 	}
 	concurrency, d.chunks = connectionPlan(concurrency)
-	d.Concurrency = concurrency
 	d.budget = semaphore.NewWeighted(maxConnections)
 
 	results := make([]Result, len(jobs))

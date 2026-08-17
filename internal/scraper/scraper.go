@@ -5,34 +5,23 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
-	"time"
 
 	"github.com/PuerkitoBio/goquery"
+
+	"jasmr-dl/internal/util"
 )
-
-// PoliteDelay is the robots.txt Crawl-delay. It applies between fetches of the
-// site itself, not the media host.
-const PoliteDelay = 10 * time.Second
-
-var rjPattern = regexp.MustCompile(`RJ\d+`)
 
 // Scraper reads album metadata. Safe to reuse across albums.
 type Scraper struct {
 	client    *http.Client
 	userAgent string
-	delay     time.Duration
-	fetched   bool
 }
 
-// New returns a Scraper honoring the robots.txt crawl delay.
+// New returns a Scraper that reads pages as the given browser.
 func New(client *http.Client, userAgent string) *Scraper {
-	return &Scraper{client: client, userAgent: userAgent, delay: PoliteDelay}
+	return &Scraper{client: client, userAgent: userAgent}
 }
-
-// SetDelay is for tests; lowering it live ignores the declared Crawl-delay.
-func (s *Scraper) SetDelay(d time.Duration) { s.delay = d }
 
 // Album reads a post page's audio in one request.
 func (s *Scraper) Album(ctx context.Context, pageURL string) (*Album, error) {
@@ -50,7 +39,6 @@ func (s *Scraper) Album(ctx context.Context, pageURL string) (*Album, error) {
 		PageURL:  pageURL,
 		Title:    extractTitle(doc),
 		CoverURL: extractCover(doc, base),
-		RJCode:   extractRJCode(doc),
 		Artists:  extractArtists(doc),
 		Tracks:   directTracks(doc, base),
 		Chapters: extractChapters(doc),
@@ -61,17 +49,8 @@ func (s *Scraper) Album(ctx context.Context, pageURL string) (*Album, error) {
 	return album, nil
 }
 
-// fetchDoc GETs and parses HTML, waiting the crawl delay after the first call.
+// fetchDoc GETs and parses HTML.
 func (s *Scraper) fetchDoc(ctx context.Context, target string) (*goquery.Document, error) {
-	if s.fetched && s.delay > 0 {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(s.delay):
-		}
-	}
-	s.fetched = true
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
@@ -109,19 +88,17 @@ func extractTitle(doc *goquery.Document) string {
 // the first <img> is the logo. Art and media hosts differ only by transposed
 // characters (weeabo0 vs weeab0o), so never derive one from the other.
 func extractCover(doc *goquery.Document, base *url.URL) string {
-	if v, ok := doc.Find("video[poster]").First().Attr("poster"); ok {
-		if abs := resolve(base, v); abs != "" {
-			return abs
+	for _, sel := range []struct{ query, attr string }{
+		{"video[poster]", "poster"},
+		{`meta[property="og:image"]`, "content"},
+		// Art is lazy-loaded: src holds a placeholder, data-src the real URL.
+		{`img[data-src*="pic."]`, "data-src"},
+	} {
+		if v, ok := doc.Find(sel.query).First().Attr(sel.attr); ok {
+			if abs := util.ResolveURL(base, v); abs != "" {
+				return abs
+			}
 		}
-	}
-	if v, ok := doc.Find(`meta[property="og:image"]`).Attr("content"); ok {
-		if abs := resolve(base, v); abs != "" {
-			return abs
-		}
-	}
-	// Art is lazy-loaded: src holds a placeholder, data-src the real URL.
-	if v, ok := doc.Find(`img[data-src*="pic."]`).First().Attr("data-src"); ok {
-		return resolve(base, v)
 	}
 	return ""
 }
@@ -136,37 +113,4 @@ func extractArtists(doc *goquery.Document) string {
 		v = strings.TrimSpace(rest)
 	}
 	return v
-}
-
-func extractRJCode(doc *goquery.Document) string {
-	for _, sel := range []string{"video[title]", "audio[title]"} {
-		if v, ok := doc.Find(sel).First().Attr("title"); ok {
-			if m := rjPattern.FindString(v); m != "" {
-				return m
-			}
-		}
-	}
-	// The "RJ Code: RJnnnnnn" line in the post body.
-	return rjPattern.FindString(doc.Find("body").Text())
-}
-
-// resolve makes a possibly-relative href absolute.
-func resolve(base *url.URL, href string) string {
-	href = strings.TrimSpace(href)
-	if href == "" {
-		return ""
-	}
-	u, err := url.Parse(href)
-	if err != nil {
-		return ""
-	}
-	return base.ResolveReference(u).String()
-}
-
-func isHTTP(raw string) bool {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return false
-	}
-	return u.Scheme == "http" || u.Scheme == "https"
 }

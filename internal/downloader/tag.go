@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
-	"time"
 )
 
 // Tags is metadata written to every finished file.
@@ -64,18 +64,6 @@ func (d *Downloader) tagging(next int, muxer, chapMeta string) (inputs, opts []s
 	return inputs, opts
 }
 
-// writeChapters emits the ffmetadata file, or "" when there is nothing to write.
-func (d *Downloader) writeChapters(audio string, total time.Duration) (string, error) {
-	if len(d.Chapters) == 0 || total <= 0 {
-		return "", nil
-	}
-	path := audio + ".ffmeta"
-	if err := writeChapterMeta(path, d.Chapters, total); err != nil {
-		return "", err
-	}
-	return path, nil
-}
-
 // nothingToTag reports whether a file would be rewritten for no reason.
 func (d *Downloader) nothingToTag() bool {
 	return d.CoverPath == "" && len(d.Chapters) == 0 && d.Tags == (Tags{})
@@ -94,27 +82,27 @@ func (d *Downloader) tag(ctx context.Context, audio string) error {
 
 	var chapMeta string
 	if len(d.Chapters) > 0 {
+		// Chapter ends need the file's real length, so probe it first.
 		total, err := d.probeDuration(ctx, audio)
 		if err != nil {
 			return err
 		}
-		if chapMeta, err = d.writeChapters(audio, total); err != nil {
+		chapMeta = audio + ".ffmeta"
+		if err := writeChapterMeta(chapMeta, d.Chapters, total); err != nil {
 			return err
 		}
-		if chapMeta != "" {
-			defer os.Remove(chapMeta)
-		}
+		defer os.Remove(chapMeta)
 	}
 
 	inputs, opts := d.tagging(1, muxer, chapMeta)
 
 	// The suffix hides the extension ffmpeg would infer the format from.
 	staged := audio + ".tagged"
-	args := append([]string{"-nostdin", "-loglevel", "error", "-y", "-i", audio}, inputs...)
-	args = append(args, opts...)
-	args = append(args, "-f", muxer, staged)
+	args := slices.Concat(ffmpegQuiet,
+		[]string{"-i", audio}, inputs, opts,
+		[]string{"-f", muxer, staged})
 
-	out, err := runFFmpeg(ctx, ffmpeg, args)
+	out, err := runFFmpeg(ctx, ffmpeg, args...)
 	if err != nil {
 		os.Remove(staged)
 		return fmt.Errorf("tag: %w: %s", err, out)

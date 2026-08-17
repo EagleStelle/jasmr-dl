@@ -40,7 +40,7 @@ var rootCmd = &cobra.Command{
 		if len(args) == 0 {
 			return cmd.Help()
 		}
-		return runGet(cmd, args)
+		return runDownload(cmd, args)
 	},
 	SilenceUsage:  true,
 	SilenceErrors: true,

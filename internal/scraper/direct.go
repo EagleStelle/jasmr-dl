@@ -30,7 +30,7 @@ func directTracks(doc *goquery.Document, base *url.URL) []Track {
 			}
 			seen[audio[0]] = true
 			files = append(files, Track{
-				Title:      util.Sanitize(urlBase(audio[0])),
+				Title:      util.Sanitize(util.URLBase(audio[0])),
 				LinkURL:    audio[0],
 				Alternates: audio[1:],
 				Source:     SourceDirect,
@@ -42,7 +42,7 @@ func directTracks(doc *goquery.Document, base *url.URL) []Track {
 			seen[playlist[0]] = true
 			playlists = append(playlists, Track{
 				// The remux picks the container.
-				Title:   util.Sanitize(strings.TrimSuffix(urlBase(playlist[0]), playlistExt)),
+				Title:   util.Sanitize(strings.TrimSuffix(util.URLBase(playlist[0]), playlistExt)),
 				LinkURL: playlist[0],
 				Source:  SourceHLS,
 			})
@@ -58,15 +58,16 @@ func directTracks(doc *goquery.Document, base *url.URL) []Track {
 // mediaCandidates splits a player's sources into files and playlists.
 func mediaCandidates(sel *goquery.Selection, base *url.URL) (audio, playlists []string) {
 	add := func(raw string) {
-		abs := resolve(base, raw)
-		if abs == "" || !isHTTP(abs) {
+		abs := util.ResolveURL(base, raw)
+		if abs == "" {
 			return
 		}
 
+		name := util.URLBase(abs)
 		target := &audio
 		switch {
-		case isAudioURL(abs):
-		case strings.EqualFold(path.Ext(urlBase(abs)), playlistExt):
+		case util.IsAudioFile(name):
+		case strings.EqualFold(path.Ext(name), playlistExt):
 			target = &playlists
 		default:
 			return
@@ -89,22 +90,4 @@ func mediaCandidates(sel *goquery.Selection, base *url.URL) (audio, playlists []
 	})
 
 	return audio, playlists
-}
-
-// isAudioURL reads only the path, so a query cannot hide the extension.
-func isAudioURL(raw string) bool {
-	return util.IsAudioFile(urlBase(raw))
-}
-
-// urlBase is a URL's final path element, percent-decoded.
-func urlBase(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	b := path.Base(u.Path)
-	if b == "." || b == "/" {
-		return ""
-	}
-	return b
 }
