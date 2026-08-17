@@ -7,35 +7,29 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// defaultUserAgent spoofs a real browser. The Go default ("Go-http-client/1.1")
-// is widely blocked.
-const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-	"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-
 var (
 	outputDir   string
 	concurrency int
 	retries     int
-	userAgent   string
-	mode        int
+	cookieFile  string
+	noCover     bool
+	noChapters  bool
+	noTags      bool
 	verbose     bool
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "jasmr-dl <url>",
-	Short: "Download audio albums from japaneseasmr.com",
-	Long: "jasmr-dl downloads every track on a japaneseasmr.com album page,\n" +
-		"concurrently, with resume and retry.",
-	Example: "  jasmr-dl https://japaneseasmr.com/12345/          # combined file\n" +
-		"  jasmr-dl https://japaneseasmr.com/12345/ -m 1     # split tracks\n" +
-		"  jasmr-dl https://japaneseasmr.com/12345/ -m 2     # both\n" +
-		"  jasmr-dl https://japaneseasmr.com/12345/ -o ./out -c 4",
+	Use: "jasmr-dl <url>",
+	Example: "  jasmr-dl https://japaneseasmr.com/12345/\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ -o ./out -N 8\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ --no-cover\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ -c C:\\path\\cookies.txt",
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
 			return cmd.Help()
 		}
-		return runGet(cmd, args)
+		return runDownload(cmd, args)
 	},
 	SilenceUsage:  true,
 	SilenceErrors: true,
@@ -52,9 +46,11 @@ func Execute() {
 func init() {
 	f := rootCmd.PersistentFlags()
 	f.StringVarP(&outputDir, "output", "o", "", "download directory (default: the album title)")
-	f.IntVarP(&mode, "mode", "m", 0, "what to download: 0 combined, 1 split tracks, 2 both")
-	f.IntVarP(&concurrency, "concurrency", "c", 3, "simultaneous downloads")
-	f.IntVarP(&retries, "retries", "r", 4, "per-file retry attempts")
-	f.StringVarP(&userAgent, "user-agent", "u", defaultUserAgent, "User-Agent sent with every request")
+	f.IntVarP(&concurrency, "concurrency", "N", 3, "files to download at once")
+	f.IntVarP(&retries, "retries", "R", 4, "per-file retry attempts")
+	f.StringVarP(&cookieFile, "cookies", "c", "", "path to a cookies.txt export, saved for later runs")
+	f.BoolVarP(&noCover, "no-cover", "C", false, "do not embed cover art")
+	f.BoolVarP(&noChapters, "no-chapters", "H", false, "do not embed the track list as chapters")
+	f.BoolVarP(&noTags, "no-tags", "T", false, "do not write title, artist or album metadata")
 	f.BoolVarP(&verbose, "verbose", "v", false, "debug logging")
 }

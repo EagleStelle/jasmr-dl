@@ -43,6 +43,15 @@ func NewProgress(w io.Writer) *Progress {
 // Start creates the line for name. A retry re-reports the same name, so an
 // existing line is reused rather than duplicated.
 func (b *Progress) Start(name string, total int64) {
+	b.start(name, total, decor.CountersKibiByte("% .1f / % .1f"))
+}
+
+// StartCount counts segments, for HLS jobs with no known byte total.
+func (b *Progress) StartCount(name string, total int64) {
+	b.start(name, total, decor.CountersNoUnit("%d / %d segments"))
+}
+
+func (b *Progress) start(name string, total int64, counters decor.Decorator) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -61,7 +70,7 @@ func (b *Progress) Start(name string, total int64) {
 			decor.Name(" "), // the name column clips flush, so separate it here
 			decor.Percentage(decor.WC{W: 5}),
 			decor.Name("  "),
-			decor.CountersKibiByte("% .1f / % .1f"),
+			counters,
 		),
 	)
 }

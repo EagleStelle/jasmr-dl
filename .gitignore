@@ -17,6 +17,8 @@ go.work
 go.work.sum
 
 # Downloaded media
+*.jpg
+*.webp
 *.mp3
 *.wav
 *.m4a

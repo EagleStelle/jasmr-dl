@@ -14,14 +14,22 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sync/semaphore"
+
+	"jasmr-dl/internal/scraper"
 	"jasmr-dl/internal/util"
 )
 
-// Job is one file to fetch. LinkURL is an unresolved dlc.php link; Name is the
-// listing's label, used only if the server declines to name the file.
+// Job is one file to fetch. Name is used only if the server declines to name it.
 type Job struct {
 	Name    string
 	LinkURL string
+
+	Source     scraper.Source
+	Alternates []string
+
+	// The media host answers 403 without it.
+	Referer string
 }
 
 // ProgressFunc reports transfer progress. total is -1 when unknown.
@@ -29,12 +37,30 @@ type ProgressFunc func(name string, done, total int64)
 
 // Downloader fetches jobs into OutputDir.
 type Downloader struct {
-	Client     *http.Client
-	UserAgent  string
-	OutputDir  string
-	Retries    int
+	Client    *http.Client
+	UserAgent string
+	OutputDir string
+	Retries   int
+
+	CoverPath string
+
+	// Chapters only mean anything when one file holds the whole work.
+	Chapters []scraper.Chapter
+
+	Tags Tags
+
+	// Ranged chunks per file. Run derives it from the files in flight.
+	chunks int
+	budget *semaphore.Weighted
+
 	OnStart    func(name string, total int64)
 	OnProgress ProgressFunc
+
+	// OnCoverError reports art that could not be attached; the audio is fine.
+	OnCoverError func(name string, err error)
+
+	// OnStartCount counts segments; an HLS byte total needs a request each.
+	OnStartCount func(name string, total int64)
 }
 
 // Download fetches one job, resuming a partial file if one is present. It
@@ -67,30 +93,48 @@ func (d *Downloader) Download(ctx context.Context, job Job) (string, error) {
 	return "", fmt.Errorf("after %d attempts: %w", d.Retries+1, lastErr)
 }
 
-// attempt runs the full resolve-and-transfer cycle once. Resolution happens
-// inside the retry loop on purpose: the signed URL is short-lived, so a retry
-// after a long backoff needs a fresh one rather than a stale cached URL.
+// attempt runs one resolve-and-transfer cycle.
 func (d *Downloader) attempt(ctx context.Context, job Job) (string, error) {
-	res, err := Resolve(ctx, d.Client, d.UserAgent, job.LinkURL)
+	// A playlist has no single file behind it.
+	if job.Source == scraper.SourceHLS {
+		return d.assembleHLS(ctx, job)
+	}
+
+	res, err := d.pickEncoding(ctx, job)
 	if err != nil {
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, res.URL, nil)
-	if err != nil {
-		return "", permanent(err)
+	if err := d.acquire(ctx); err != nil {
+		return "", err
 	}
-	setNavigation(req, d.UserAgent, "same-origin")
-	req.Header.Set("Referer", res.Referer)
+	held := true
+	release := func() {
+		if held {
+			held = false
+			d.release()
+		}
+	}
+	defer release()
 
-	// Probe for an existing part file before choosing a filename: the part
-	// path depends on the name, which the server supplies, so name first.
+	req, err := d.mediaRequest(ctx, res.URL, res.Referer)
+	if err != nil {
+		return "", err
+	}
+
+	// Name first: the part path depends on it.
 	resp, err := d.Client.Do(req)
 	if err != nil {
 		return "", err
 	}
 
-	name := filenameFrom(resp, job.Name)
+	// res.Name names the encoding that actually answered.
+	fallback := job.Name
+	if res.Name != "" {
+		fallback = res.Name
+	}
+
+	name := filenameFrom(resp, fallback)
 	if !util.IsAudioFile(name) {
 		resp.Body.Close()
 		return "", permanent(fmt.Errorf("refusing %q: not an allowlisted audio file", name))
@@ -99,40 +143,108 @@ func (d *Downloader) attempt(ctx context.Context, job Job) (string, error) {
 	final := filepath.Join(d.OutputDir, name)
 	part := final + ".part"
 
-	// If the finished file is already there at the advertised size, skip.
-	if fi, statErr := os.Stat(final); statErr == nil && resp.ContentLength > 0 && fi.Size() == resp.ContentLength {
+	if d.finished(ctx, final, resp.ContentLength) {
 		resp.Body.Close()
 		return final, nil
 	}
 
+	// This host throttles per connection, so one socket wastes bandwidth.
+	if resp.Header.Get("Accept-Ranges") == "bytes" {
+		if plan, ok := planChunks(resp.ContentLength, d.chunks); ok {
+			resp.Body.Close()
+			release() // the chunks take their own slots
+			path, err := d.chunked(ctx, res, plan, name, final, part)
+			if errors.Is(err, errRangeIgnored) {
+				if err := d.acquire(ctx); err != nil {
+					return "", err
+				}
+				held = true
+				// The host advertises ranges without honoring them: one
+				// stream from the start is all it will serve.
+				return d.transfer(ctx, res, 0, name, final, part)
+			}
+			if err != nil {
+				return "", err
+			}
+			return d.embedded(ctx, path)
+		}
+	}
+
 	// Restart the request as a ranged one if a partial file exists. The first
 	// response is discarded; it only existed to learn the name and size.
-	if fi, statErr := os.Stat(part); statErr == nil && fi.Size() > 0 {
+	if have := fileSize(part); have > 0 {
 		resp.Body.Close()
-		resp, err = d.rangedGet(ctx, res, fi.Size())
-		if err != nil {
-			return "", err
-		}
+		return d.transfer(ctx, res, have, name, final, part)
 	}
 	defer resp.Body.Close()
 
-	return d.writeBody(ctx, resp, name, final, part)
+	return d.store(ctx, resp, name, final, part)
+}
+
+// transfer runs one ranged request from byte from, then writes what it answers.
+func (d *Downloader) transfer(ctx context.Context, res *Resolved, from int64, name, final, part string) (string, error) {
+	resp, err := d.rangedGet(ctx, res, from)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	return d.store(ctx, resp, name, final, part)
+}
+
+// store writes a response to disk and tags the finished file.
+func (d *Downloader) store(ctx context.Context, resp *http.Response, name, final, part string) (string, error) {
+	path, err := d.writeBody(ctx, resp, name, final, part)
+	if err != nil {
+		return "", err
+	}
+	return d.embedded(ctx, path)
+}
+
+// embedded attaches art and chapters. Failure is non-fatal: the audio is fine.
+func (d *Downloader) embedded(ctx context.Context, path string) (string, error) {
+	if err := d.tag(ctx, path); err != nil {
+		if d.OnCoverError != nil {
+			d.OnCoverError(filepath.Base(path), err)
+		}
+	}
+	return path, nil
+}
+
+// finished tests for a complete download. Tagging changes a file's length, so a
+// size mismatch alone proves nothing.
+func (d *Downloader) finished(ctx context.Context, final string, advertised int64) bool {
+	size := fileSize(final)
+	if size == 0 {
+		return false
+	}
+	if advertised > 0 && size == advertised {
+		return true
+	}
+	return d.CoverPath != "" && d.hasCover(ctx, final)
+}
+
+func (d *Downloader) acquire(ctx context.Context) error {
+	if d.budget == nil {
+		return nil
+	}
+	return d.budget.Acquire(ctx, 1)
+}
+
+func (d *Downloader) release() {
+	if d.budget != nil {
+		d.budget.Release(1)
+	}
 }
 
 func (d *Downloader) rangedGet(ctx context.Context, res *Resolved, from int64) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, res.URL, nil)
-	if err != nil {
-		return nil, permanent(err)
-	}
-	setNavigation(req, d.UserAgent, "same-origin")
-	req.Header.Set("Referer", res.Referer)
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-", from))
-
-	resp, err := d.Client.Do(req)
+	req, err := d.mediaRequest(ctx, res.URL, res.Referer)
 	if err != nil {
 		return nil, err
 	}
-	return resp, nil
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-", from))
+
+	return d.Client.Do(req)
 }
 
 func (d *Downloader) writeBody(ctx context.Context, resp *http.Response, name, final, part string) (string, error) {
@@ -157,16 +269,8 @@ func (d *Downloader) writeBody(ctx context.Context, resp *http.Response, name, f
 			return "", err
 		}
 		return final, nil
-	case http.StatusForbidden, http.StatusUnauthorized:
-		// Signed URL expired. Retrying re-resolves from scratch.
-		return "", fmt.Errorf("%s: signed URL rejected, will re-resolve", resp.Status)
-	case http.StatusTooManyRequests, http.StatusServiceUnavailable:
-		return "", retryAfterError{status: resp.Status, wait: parseRetryAfter(resp.Header.Get("Retry-After"))}
 	default:
-		if resp.StatusCode >= 500 {
-			return "", fmt.Errorf("server error: %s", resp.Status)
-		}
-		return "", permanent(fmt.Errorf("unexpected status: %s", resp.Status))
+		return "", transferStatus(resp)
 	}
 
 	total := resp.ContentLength
@@ -187,14 +291,10 @@ func (d *Downloader) writeBody(ctx context.Context, resp *http.Response, name, f
 	}
 
 	done := offset
-	var w io.Writer = f
-	if d.OnProgress != nil {
-		w = io.MultiWriter(f, writerFunc(func(p []byte) (int, error) {
-			done += int64(len(p))
-			d.OnProgress(name, done, total)
-			return len(p), nil
-		}))
-	}
+	w := d.tee(f, func(n int) {
+		done += int64(n)
+		d.OnProgress(name, done, total)
+	})
 
 	_, copyErr := io.Copy(w, resp.Body)
 	closeErr := f.Close()
@@ -283,6 +383,26 @@ func rangeTotal(h string) int64 {
 
 // --- retry ----------------------------------------------------------------
 
+// errRangeIgnored: range support advertised, then the whole file sent anyway.
+var errRangeIgnored = errors.New("host ignored the Range header")
+
+// transferStatus turns a status no transfer can use into an error that says
+// whether retrying stands a chance. Callers handle the codes they can use
+// first, so anything reaching here has already failed.
+func transferStatus(resp *http.Response) error {
+	switch resp.StatusCode {
+	case http.StatusForbidden, http.StatusUnauthorized:
+		// Signed URL expired. Retrying re-resolves from scratch.
+		return fmt.Errorf("%s: signed URL rejected, will re-resolve", resp.Status)
+	case http.StatusTooManyRequests, http.StatusServiceUnavailable:
+		return retryAfterError{status: resp.Status, wait: parseRetryAfter(resp.Header.Get("Retry-After"))}
+	}
+	if resp.StatusCode >= 500 {
+		return fmt.Errorf("server error: %s", resp.Status)
+	}
+	return permanent(fmt.Errorf("unexpected status: %s", resp.Status))
+}
+
 type permanentError struct{ err error }
 
 func (e permanentError) Error() string { return e.err.Error() }
@@ -341,3 +461,16 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 type writerFunc func(p []byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+// tee returns w with each write's length reported to add, or w unchanged when
+// nothing is listening. Callers count bytes their own way: a single stream
+// tracks its own offset, chunks share an atomic.
+func (d *Downloader) tee(w io.Writer, add func(n int)) io.Writer {
+	if d.OnProgress == nil {
+		return w
+	}
+	return io.MultiWriter(w, writerFunc(func(p []byte) (int, error) {
+		add(len(p))
+		return len(p), nil
+	}))
+}

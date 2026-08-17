@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 )
 
 // Result records the outcome of one job.
@@ -16,15 +17,16 @@ type Result struct {
 	Err  error
 }
 
-// Run downloads every job with at most concurrency transfers in flight.
+// Run downloads concurrency files at once, each split across ranged chunks.
 //
-// A failed job does not cancel its siblings: workers always return nil and
-// failures are collected, so one dead link cannot abandon an otherwise good
-// album. Cancellation still propagates, so Ctrl+C stops everything.
+// A failed job does not cancel its siblings, so one dead link cannot abandon a
+// good album. Cancellation still propagates.
 func (d *Downloader) Run(ctx context.Context, jobs []Job, concurrency int) []Result {
-	if concurrency < 1 {
-		concurrency = 1
+	if len(jobs) > 0 && concurrency > len(jobs) {
+		concurrency = len(jobs)
 	}
+	concurrency, d.chunks = connectionPlan(concurrency)
+	d.budget = semaphore.NewWeighted(maxConnections)
 
 	results := make([]Result, len(jobs))
 
