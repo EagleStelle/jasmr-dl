@@ -74,6 +74,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 
 	cmd.Printf("[info] %s to download\n", plural(len(album.Tracks), "file"))
 	debugf(cmd, "cover: %s", orNone(album.CoverURL))
+	debugf(cmd, "gallery: %d images", len(album.ImageURLs))
 	debugf(cmd, "album: %s, circle: %s, date: %s", orNone(album.RJCode), orNone(album.Circle), orNone(album.Date))
 	debugf(cmd, "chapters: %d", len(album.Chapters))
 	for _, t := range album.Tracks {
@@ -98,6 +99,9 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		})
 	}
 
+	coverPath := fetchCover(ctx, cmd, sess, album, dir)
+	fetchImages(ctx, cmd, sess, album, dir)
+
 	prog := downloader.NewProgress(cmd.OutOrStdout())
 	d := &downloader.Downloader{
 		Client:       sess.client,
@@ -105,7 +109,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		OutputDir:    dir,
 		Connections:  connections,
 		Retries:      retries,
-		CoverPath:    fetchCover(ctx, cmd, sess, album, dir),
+		CoverPath:    coverPath,
 		Chapters:     chaptersFor(cmd, album),
 		OnCoverError: func(name string, err error) { cmd.PrintErrf("[warn] %s: %v\n", name, err) },
 		OnStart:      prog.Start,
@@ -347,6 +351,33 @@ func fetchCover(ctx context.Context, cmd *cobra.Command, s session, album *scrap
 	}
 	debugf(cmd, "cover saved to %s", path)
 	return path
+}
+
+// fetchImages saves the rest of the post's gallery beside the jacket. Best
+// effort, like the cover: pictures are not what the run is for.
+func fetchImages(ctx context.Context, cmd *cobra.Command, s session, album *scraper.Album, dir string) {
+	if noImages {
+		return
+	}
+
+	var urls []string
+	for _, u := range album.ImageURLs {
+		// The cover is the jacket. Dropping it here rather than counting on
+		// it being first keeps the numbering the same on a post that opens
+		// its gallery with something else.
+		if u != album.CoverURL {
+			urls = append(urls, u)
+		}
+	}
+	if len(urls) == 0 {
+		return
+	}
+
+	paths := downloader.FetchImages(ctx, s.client, s.userAgent, urls, album.PageURL, dir,
+		func(err error) { cmd.PrintErrf("[warn] image not saved: %v\n", err) })
+	if len(paths) > 0 {
+		cmd.Printf("[info] %s saved to %s\n", plural(len(paths), "image"), filepath.Dir(paths[0]))
+	}
 }
 
 // reportSource warns when a post offers only its stream.

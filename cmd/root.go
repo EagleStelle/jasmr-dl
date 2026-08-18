@@ -18,6 +18,7 @@ var (
 	browserPath string
 	showBrowser bool
 	noCover     bool
+	noImages    bool
 	noChapters  bool
 	noTags      bool
 	verbose     bool
@@ -58,6 +59,7 @@ func init() {
 	f.StringVar(&browserPath, "use-browser", "", "path to a browser executable that clears a Cloudflare challenge")
 	f.BoolVar(&showBrowser, "show-browser", false, "show the browser clearing a Cloudflare challenge instead of running it headless")
 	f.BoolVarP(&noCover, "no-cover", "C", false, "do not embed cover art")
+	f.BoolVarP(&noImages, "no-images", "I", false, "do not save the rest of the post's gallery")
 	f.BoolVarP(&noChapters, "no-chapters", "H", false, "do not embed the track list as chapters")
 	f.BoolVarP(&noTags, "no-tags", "T", false, "do not write title, artist or album metadata")
 	f.BoolVarP(&verbose, "verbose", "v", false, "debug logging")

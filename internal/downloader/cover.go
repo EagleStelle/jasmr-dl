@@ -15,7 +15,18 @@ import (
 	"jasmr-dl/internal/util"
 )
 
-const maxCoverBytes = 16 << 20
+const (
+	// maxImageBytes only stops a mislabelled link filling the disk. A post's
+	// work-part art runs to several MiB a picture, so the ceiling sits well
+	// clear of anything the gallery legitimately holds.
+	maxImageBytes = 64 << 20
+
+	// jacketName is the album art, kept beside the audio it is embedded in.
+	jacketName = "jacket"
+
+	// imagesDirName holds the rest of the gallery, which no file carries.
+	imagesDirName = "images"
+)
 
 // Extensions whose muxer can carry art and chapters.
 var coverMuxers = map[string]string{
@@ -24,9 +35,41 @@ var coverMuxers = map[string]string{
 	".flac": "flac",
 }
 
-// FetchCover saves album art into dir and returns its path.
+// FetchCover saves album art into dir as the jacket and returns its path.
 func FetchCover(ctx context.Context, client *http.Client, userAgent, coverURL, referer, dir string) (string, error) {
-	req, err := newMediaRequest(ctx, coverURL, referer, userAgent)
+	return fetchImage(ctx, client, userAgent, coverURL, referer, dir, jacketName)
+}
+
+// FetchImages saves urls into an images subfolder of dir, numbered in page
+// order, and returns the paths written. A picture that will not come down goes
+// to onError and is skipped, since the gallery is not what the run is for.
+func FetchImages(ctx context.Context, client *http.Client, userAgent string, urls []string, referer, dir string, onError func(err error)) []string {
+	dir = filepath.Join(dir, imagesDirName)
+
+	var paths []string
+	for i, u := range urls {
+		// Numbered by position, not by how many landed, so one picture
+		// failing does not shift the names of the pictures after it.
+		path, err := fetchImage(ctx, client, userAgent, u, referer, dir, fmt.Sprintf("%02d", i+1))
+		if err != nil {
+			if onError != nil {
+				onError(err)
+			}
+			// A cancelled run would otherwise report every picture left.
+			if ctx.Err() != nil {
+				break
+			}
+			continue
+		}
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+// fetchImage saves one picture into dir under name, carrying the extension its
+// bytes call for.
+func fetchImage(ctx context.Context, client *http.Client, userAgent, imageURL, referer, dir, name string) (string, error) {
+	req, err := newMediaRequest(ctx, imageURL, referer, userAgent)
 	if err != nil {
 		return "", err
 	}
@@ -41,23 +84,29 @@ func FetchCover(ctx context.Context, client *http.Client, userAgent, coverURL, r
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", util.BadStatus(coverURL, resp)
+		return "", util.BadStatus(imageURL, resp)
 	}
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxCoverBytes))
+	// One byte past the cap, so a picture that overruns it is refused rather
+	// than written short: a truncated file still sniffs as an image, so nothing
+	// downstream would ever notice the missing half.
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageBytes+1))
 	if err != nil {
 		return "", err
+	}
+	if len(data) > maxImageBytes {
+		return "", fmt.Errorf("%q is larger than the %d MiB an image may be", imageURL, maxImageBytes>>20)
 	}
 	// This CDN serves WebP from a .jpg URL, declaring image/jpeg.
 	ext := imageExt(data)
 	if ext == "" {
-		return "", fmt.Errorf("cover %q is not an image this tool recognizes", coverURL)
+		return "", fmt.Errorf("%q is not an image this tool recognizes", imageURL)
 	}
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, "cover"+ext)
+	path := filepath.Join(dir, name+ext)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return "", err
 	}
@@ -72,6 +121,8 @@ func imageExt(data []byte) string {
 		return ".png"
 	case "image/webp":
 		return ".webp"
+	case "image/gif":
+		return ".gif"
 	default:
 		return ""
 	}

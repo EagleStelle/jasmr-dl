@@ -37,15 +37,16 @@ func (s *Scraper) Album(ctx context.Context, pageURL string) (*Album, error) {
 	}
 
 	album := &Album{
-		PageURL:  pageURL,
-		Title:    extractTitle(doc),
-		CoverURL: extractCover(doc, base),
-		Artists:  extractArtists(doc),
-		Circle:   extractCircle(doc),
-		RJCode:   extractRJCode(doc),
-		Date:     extractDate(doc),
-		Tracks:   directTracks(doc, base),
-		Chapters: extractChapters(doc),
+		PageURL:   pageURL,
+		Title:     extractTitle(doc),
+		CoverURL:  extractCover(doc, base),
+		Artists:   extractArtists(doc),
+		Circle:    extractCircle(doc),
+		RJCode:    extractRJCode(doc),
+		Date:      extractDate(doc),
+		Tracks:    directTracks(doc, base),
+		Chapters:  extractChapters(doc),
+		ImageURLs: extractImages(doc, base),
 	}
 	if len(album.Tracks) == 0 {
 		return nil, fmt.Errorf("no audio in any player on %s", pageURL)
@@ -119,6 +120,29 @@ func extractCover(doc *goquery.Document, base *url.URL) string {
 		}
 	}
 	return ""
+}
+
+// gallerySelector is the post's lightbox, one empty anchor per picture. The
+// <img> tags beside it are lazy-load placeholders and thumbnails, so the full
+// size of a picture is only ever in an href.
+const gallerySelector = ".fotorama a[href]"
+
+// extractImages lists the post's gallery in page order, the cover first. A page
+// can name one picture twice, so each URL is kept once.
+func extractImages(doc *goquery.Document, base *url.URL) []string {
+	var (
+		images []string
+		seen   = map[string]bool{}
+	)
+	doc.Find(gallerySelector).Each(func(_ int, sel *goquery.Selection) {
+		abs := util.ResolveURL(base, sel.AttrOr("href", ""))
+		if abs == "" || seen[abs] || !util.IsImageFile(util.URLBase(abs)) {
+			return
+		}
+		seen[abs] = true
+		images = append(images, abs)
+	})
+	return images
 }
 
 var (

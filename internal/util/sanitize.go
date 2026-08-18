@@ -29,6 +29,16 @@ var audioExts = map[string]bool{
 	".wav":  true,
 }
 
+// imageExts is an allowlist for the same reason audioExts is: a gallery link is
+// page content, so nothing decides what it points at except this list.
+var imageExts = map[string]bool{
+	".jpg":  true,
+	".jpeg": true,
+	".png":  true,
+	".webp": true,
+	".gif":  true,
+}
+
 // maxNameRunes leaves room for the album directory inside the 255-unit limit
 // most filesystems place on a single path component.
 const maxNameRunes = 120
@@ -63,4 +73,9 @@ func Sanitize(name string) string {
 // IsAudioFile reports whether name carries an allowlisted audio extension.
 func IsAudioFile(name string) bool {
 	return audioExts[strings.ToLower(filepath.Ext(strings.TrimSpace(name)))]
+}
+
+// IsImageFile reports whether name carries an allowlisted image extension.
+func IsImageFile(name string) bool {
+	return imageExts[strings.ToLower(filepath.Ext(strings.TrimSpace(name)))]
 }
