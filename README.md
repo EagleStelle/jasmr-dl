@@ -84,12 +84,45 @@ jasmr-dl https://japaneseasmr.com/12345/ -P ./out -o "{rjcode}/{number}.{ext}"
 A field the post does not carry writes `Unknown`. `{number}`, `{chapter}`,
 `{track}`, `{tracktotal}` and `{ext}` belong to the filename, not a directory.
 
-The default is `{year}/{rjcode}/{rjcode}_{number}.{ext}`, except where a stream
-is cut into chapters, which defaults to `{year}/{rjcode}/{number}_{chapter}.{ext}`.
-Passing `-o` replaces both.
+The defaults are `{year}/{rjcode}/{rjcode}_{number}.{ext}` per track and
+`{year}/{rjcode}/{number}_{chapter}.{ext}` per chapter.
 
 Cover art and the gallery follow the audio: `jacket.jpg` beside it, the rest
 under `images/`.
+
+### Divider
+
+`<A|B>` names a template for each shape a post takes: `A` per track, `B` per
+chapter.
+
+```
+-o "{year}/{circle}/<{rjcode}_{number}.{ext}|{number}_{chapter}.{ext}>"
+```
+
+The divider goes anywhere in the path:
+
+```
+-o "<{year}/{title}/{rjcode}_{number}.{ext}|{date}/{rjcode}/{number}_{chapter}.{ext}>"
+```
+
+A branch of `*` keeps that side's default. Both branches cannot be `*`.
+
+```
+-o "<*|{number}_{chapter} [{circle}].{ext}>"
+-o "<{year}/{title}/{rjcode}.{ext}|*>"
+```
+
+### Numbering
+
+A template that names `{number}` places it. One that does not takes it leading
+where each file is a chapter, trailing where each is a track, and not at all
+where the post holds a single file. Given `-o "{year}/{title}.{ext}"`:
+
+| Post | Writes |
+| --- | --- |
+| One file | `2024/ある夏の日.mp3` |
+| A file per track | `2024/ある夏の日_2.mp3` |
+| A file per chapter | `2024/2_ある夏の日.mp3` |
 
 ## Chapters
 
@@ -106,7 +139,7 @@ The stream is cut into one file per chapter.
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `-o, --output` | `{year}/{rjcode}/{rjcode}_{number}.{ext}` | Template naming each file and the directories above it |
+| `-o, --output` | `{year}/{rjcode}/{rjcode}_{number}.{ext}` | Template naming each file and the directories above it; `<A\|B>` uses `A` per track, `B` per chapter |
 | `-P, --paths` | | Directory everything is written under |
 | `-N, --concurrency` | `3` | Files downloaded at once |
 | `-j, --connections` | `32` | Ranged requests in flight; this is what sets speed (max 128) |

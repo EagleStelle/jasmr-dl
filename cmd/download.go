@@ -51,12 +51,17 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	if retries < 0 {
 		return fmt.Errorf("--retries cannot be negative, got %d", retries)
 	}
-	// Settle a bad template before anything is fetched. Which default applies
-	// is not known until the post says what it holds.
-	var given *naming.Template
+	// Settle a bad template before anything is fetched. Which branch of a <…>
+	// group applies is not known yet, so both are parsed.
+	var given string
 	if cmd.Flags().Changed("output") {
-		if given, err = naming.Parse(outputTmpl); err != nil {
-			return err
+		if given = strings.TrimSpace(outputTmpl); given == "" {
+			return errors.New("output template is empty")
+		}
+		for _, split := range []bool{false, true} {
+			if _, err := templateFor(given, split, 2); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -96,7 +101,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		cmd.Printf("[info] cutting the stream into its %s\n", plural(len(chapters), "chapter"))
 	}
 
-	tmpl, err := templateFor(given, split)
+	tmpl, err := templateFor(given, split, len(album.Tracks))
 	if err != nil {
 		return err
 	}
@@ -358,16 +363,33 @@ func hasDriveLetter(dir string) bool {
 	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
 }
 
-// templateFor keeps the template the run was given, or picks the default the
-// post's own shape calls for.
-func templateFor(given *naming.Template, split bool) (*naming.Template, error) {
-	if given != nil {
-		return given, nil
-	}
+// templateFor resolves the template a run writes from. files is how many names
+// it has to keep apart.
+func templateFor(given string, split bool, files int) (*naming.Template, error) {
+	def := defaultTemplate
 	if split {
-		return naming.Parse(defaultSplitTemplate)
+		def = defaultSplitTemplate
 	}
-	return naming.Parse(defaultTemplate)
+	raw := def
+	if given != "" {
+		raw = given
+	}
+
+	chosen, err := naming.Select(raw, split, def)
+	if err != nil {
+		return nil, err
+	}
+
+	// A file per chapter always leads with its number, a file per track only
+	// carries one where the post holds more than one, and a template that
+	// places {number} itself is left to say where. Without this a custom -o
+	// naming no counter would write every file of a post to one name.
+	if split {
+		chosen = naming.WithNumber(chosen, true)
+	} else if files > 1 {
+		chosen = naming.WithNumber(chosen, false)
+	}
+	return naming.Parse(chosen)
 }
 
 // fieldsFor is the album half of the output template, the half a directory may

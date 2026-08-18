@@ -62,6 +62,7 @@ var rootCmd = &cobra.Command{
 	Example: "  jasmr-dl https://japaneseasmr.com/12345/\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"./out/{title}/{rjcode}_{number}.{ext}\" -N 8\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"{circle}/{rjcode}/{number}. {chapter}.{ext}\"\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"<*|{number}_{chapter} [{circle}].{ext}>\"\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ --no-split --no-cover\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -c C:\\path\\cookies.txt",
 	Args: cobra.MaximumNArgs(1),
@@ -85,7 +86,8 @@ func Execute() {
 
 func init() {
 	f := rootCmd.PersistentFlags()
-	f.StringVarP(&outputTmpl, "output", "o", defaultTemplate, "template naming each file and the directories above it")
+	f.StringVarP(&outputTmpl, "output", "o", defaultTemplate,
+		"template naming each file and the directories above it; <A|B> uses A per track, B per chapter")
 	f.StringVarP(&basePath, "paths", "P", "", "directory everything is written under")
 	f.IntVarP(&concurrency, "concurrency", "N", 3, "files downloaded at once")
 	f.IntVarP(&connections, "connections", "j", 32, "ranged requests in flight; this is what sets speed (max 128)")
