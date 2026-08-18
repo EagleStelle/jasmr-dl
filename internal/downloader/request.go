@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"jasmr-dl/internal/util"
+	"github.com/EagleStelle/jasmr-dl/internal/util"
 )
 
 // newMediaRequest builds the GET every media fetch starts from: a player's

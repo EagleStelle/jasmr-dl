@@ -16,7 +16,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"jasmr-dl/internal/util"
+	"github.com/EagleStelle/jasmr-dl/internal/util"
 )
 
 // A 6-hour work runs to roughly 2300 segments.

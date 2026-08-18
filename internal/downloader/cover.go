@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"jasmr-dl/internal/util"
+	"github.com/EagleStelle/jasmr-dl/internal/util"
 )
 
 const (

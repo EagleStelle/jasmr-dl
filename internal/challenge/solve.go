@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"jasmr-dl/internal/downloader"
+	"github.com/EagleStelle/jasmr-dl/internal/downloader"
 )
 
 // ErrNoBrowser means there is nothing on this machine to drive.
