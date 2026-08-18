@@ -23,6 +23,9 @@ type Album struct {
 	Date     string
 	Tracks   []Track
 
+	// ImageURLs is the post's gallery in page order, the cover first.
+	ImageURLs []string
+
 	// Chapters is present only where one stream holds the whole work.
 	Chapters []Chapter
 }
