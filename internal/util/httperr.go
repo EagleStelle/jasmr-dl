@@ -1,18 +1,21 @@
 package util
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 )
 
+// ErrChallenge marks a refusal Cloudflare made rather than a dead link, so a
+// caller can clear it and try again.
+var ErrChallenge = errors.New("Cloudflare challenge")
+
 // BadStatus names the URL alongside the status, the pair needed to tell which of
 // a job's several hops refused.
 func BadStatus(target string, resp *http.Response) error {
 	if IsChallenge(resp) {
-		return fmt.Errorf("GET %s: %s, a Cloudflare challenge rather than a dead link.\n"+
-			"       The cookies are missing or have expired. Open the page in a browser,\n"+
-			"       export its cookies as cookies.txt, and leave the file beside this binary.", target, resp.Status)
+		return fmt.Errorf("GET %s: %s: %w", target, resp.Status, ErrChallenge)
 	}
 	return fmt.Errorf("GET %s: %s", target, resp.Status)
 }

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"jasmr-dl/internal/challenge"
 	"jasmr-dl/internal/downloader"
 	"jasmr-dl/internal/scraper"
 	"jasmr-dl/internal/util"
@@ -20,6 +22,13 @@ import (
 const (
 	targetHost     = "japaneseasmr.com"
 	cookieFileName = "cookies.txt"
+
+	// profileDirName is kept between runs so a cleared challenge counts next time.
+	profileDirName = "browser-profile"
+
+	// manualClearance is the way out when no browser can do it.
+	manualClearance = "       Open the page in a browser, export its cookies as cookies.txt,\n" +
+		"       and leave the file beside this binary."
 
 	genre = "ASMR"
 
@@ -46,29 +55,19 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
 	defer stop()
 
-	jar, err := cookieJar(cmd)
+	sess, err := newSession(cmd)
 	if err != nil {
 		return err
 	}
 
-	// The UA is read off this machine's browser, because a cookie only clears
-	// the challenge when it accompanies the UA that solved it.
-	userAgent := util.UserAgent()
-	debugf(cmd, "user-agent: %s", userAgent)
-
-	// One client for the run: its connection pool is what keeps sockets warm
-	// across the page fetch, the cover and every track.
-	client := downloader.NewClient(jar)
-	sc := scraper.New(client, userAgent)
 	cmd.Printf("[info] fetching %s\n", target)
-
-	album, err := sc.Album(ctx, target.String())
+	album, err := fetchAlbum(ctx, cmd, target.String(), &sess)
 	if err != nil {
 		return err
 	}
-	// The page came back, so whatever cleared the challenge works. Only now is
-	// it worth keeping, and worth overwriting whatever was kept before.
-	if cookieFile != "" {
+	// The page came back, so the cookies work and are worth keeping. A solve has
+	// already written its own, which a stale export must not undo.
+	if cookieFile != "" && !sess.solved {
 		installCookies(cmd, cookieFile)
 	}
 	reportSource(cmd, album)
@@ -101,12 +100,12 @@ func runDownload(cmd *cobra.Command, args []string) error {
 
 	prog := downloader.NewProgress(cmd.OutOrStdout())
 	d := &downloader.Downloader{
-		Client:       client,
-		UserAgent:    userAgent,
+		Client:       sess.client,
+		UserAgent:    sess.userAgent,
 		OutputDir:    dir,
 		Connections:  connections,
 		Retries:      retries,
-		CoverPath:    fetchCover(ctx, cmd, client, album, dir),
+		CoverPath:    fetchCover(ctx, cmd, sess, album, dir),
 		Chapters:     chaptersFor(cmd, album),
 		OnCoverError: func(name string, err error) { cmd.PrintErrf("[warn] %s: %v\n", name, err) },
 		OnStart:      prog.Start,
@@ -122,23 +121,122 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	return report(cmd, results)
 }
 
-// cookieJar loads --cookies, or a cookies.txt sitting beside the binary. A nil
-// jar means neither was there.
-func cookieJar(cmd *cobra.Command) (http.CookieJar, error) {
+// session is the client and the User-Agent it presents. cf_clearance is bound to
+// the User-Agent that earned it, so the two are only ever replaced together.
+type session struct {
+	client    *http.Client
+	userAgent string
+	solved    bool // cookies.txt is already current
+}
+
+// newSession loads whatever clearance is already on disk. A run with none still
+// starts: a challenge is cleared when it appears.
+func newSession(cmd *cobra.Command) (session, error) {
+	s := session{userAgent: util.UserAgent()}
+
 	path := cookieFile
 	if path == "" {
 		path = foundCookieFile()
 	}
-	if path == "" {
-		return nil, nil
+
+	var cookies []downloader.Cookie
+	if path != "" {
+		loaded, userAgent, err := downloader.LoadCookies(path)
+		if err != nil {
+			return s, fmt.Errorf("read cookies: %w", err)
+		}
+		debugf(cmd, "cookies from %s", path)
+
+		cookies = loaded
+		// The recorded UA is the one the cookies were earned under.
+		if userAgent != "" {
+			s.userAgent = userAgent
+			debugf(cmd, "user-agent recorded alongside them")
+		}
 	}
 
-	jar, err := downloader.LoadCookieJar(path)
-	if err != nil {
-		return nil, fmt.Errorf("read cookies: %w", err)
+	if err := s.use(cookies); err != nil {
+		return s, err
 	}
-	debugf(cmd, "cookies from %s", path)
-	return jar, nil
+	debugf(cmd, "user-agent: %s", s.userAgent)
+	return s, nil
+}
+
+// use rebuilds the client around a set of cookies. One client per set: its
+// connection pool keeps sockets warm across the page fetch, the cover and every
+// track.
+func (s *session) use(cookies []downloader.Cookie) error {
+	if len(cookies) == 0 {
+		s.client = downloader.NewClient(nil)
+		return nil
+	}
+
+	jar, err := downloader.NewJar(cookies)
+	if err != nil {
+		return err
+	}
+	s.client = downloader.NewClient(jar)
+	return nil
+}
+
+// fetchAlbum reads the post page, clearing a Cloudflare challenge in a browser
+// and trying once more when one stands in the way.
+func fetchAlbum(ctx context.Context, cmd *cobra.Command, target string, s *session) (*scraper.Album, error) {
+	album, err := scraper.New(s.client, s.userAgent).Album(ctx, target)
+	if err == nil || !errors.Is(err, util.ErrChallenge) {
+		return album, err
+	}
+
+	cmd.PrintErrln("[warn] Cloudflare is challenging this request, opening a browser to clear it")
+	if err := solveChallenge(ctx, cmd, target, s); err != nil {
+		return nil, fmt.Errorf("clear the challenge: %w\n%s", err, manualClearance)
+	}
+
+	// A second refusal is not worth a third browser: what the site objects to is
+	// something no cookie fixes, the IP most likely.
+	album, err = scraper.New(s.client, s.userAgent).Album(ctx, target)
+	if errors.Is(err, util.ErrChallenge) {
+		return nil, fmt.Errorf("%w even after clearing it\n%s", err, manualClearance)
+	}
+	return album, err
+}
+
+// solveChallenge clears the challenge and moves the session onto what it earned.
+func solveChallenge(ctx context.Context, cmd *cobra.Command, target string, s *session) error {
+	res, err := challenge.Solve(ctx, target, challenge.Options{
+		BrowserPath: browserPath,
+		ProfileDir:  besideBinary(profileDirName),
+		Visible:     showBrowser,
+		Log:         func(format string, args ...any) { debugf(cmd, format, args...) },
+	})
+	if err != nil {
+		return err
+	}
+
+	s.userAgent = res.UserAgent
+	s.solved = true
+	if err := s.use(res.Cookies); err != nil {
+		return err
+	}
+	debugf(cmd, "cleared, holding %s", plural(len(res.Cookies), "cookie"))
+
+	// Keeping them is not worth failing a run that is already cleared.
+	path := besideBinary(cookieFileName)
+	if err := downloader.SaveCookies(path, res.UserAgent, res.Cookies); err != nil {
+		cmd.PrintErrf("[warn] clearance not saved for next time: %v\n", err)
+		return nil
+	}
+	cmd.Printf("[info] clearance saved to %s\n", path)
+	return nil
+}
+
+// besideBinary is where state that outlives a run goes.
+func besideBinary(name string) string {
+	exe, err := os.Executable()
+	if err != nil {
+		return name
+	}
+	return filepath.Join(filepath.Dir(exe), name)
 }
 
 // foundCookieFile looks beside the binary and then in the working directory, so
@@ -238,11 +336,11 @@ func chaptersFor(cmd *cobra.Command, album *scraper.Album) []scraper.Chapter {
 }
 
 // fetchCover is best-effort: missing art must not stop a download.
-func fetchCover(ctx context.Context, cmd *cobra.Command, client *http.Client, album *scraper.Album, dir string) string {
+func fetchCover(ctx context.Context, cmd *cobra.Command, s session, album *scraper.Album, dir string) string {
 	if noCover || album.CoverURL == "" {
 		return ""
 	}
-	path, err := downloader.FetchCover(ctx, client, util.UserAgent(), album.CoverURL, album.PageURL, dir)
+	path, err := downloader.FetchCover(ctx, s.client, s.userAgent, album.CoverURL, album.PageURL, dir)
 	if err != nil {
 		cmd.PrintErrf("[warn] no cover art: %v\n", err)
 		return ""
