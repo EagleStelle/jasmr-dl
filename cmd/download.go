@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -32,6 +33,8 @@ const (
 		"       and leave the file beside this binary."
 
 	genre = "ASMR"
+
+	imagesLabel = "images"
 
 	// partSeparator joins a work to the part one file holds.
 	partSeparator = " - "
@@ -86,7 +89,6 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	}
 	reportSource(cmd, album)
 
-	cmd.Printf("[info] %s to download\n", plural(len(album.Tracks), "file"))
 	debugf(cmd, "cover: %s", orNone(album.CoverURL))
 	debugf(cmd, "gallery: %d images", len(album.ImageURLs))
 	debugf(cmd, "album: %s, circle: %s, date: %s", orNone(album.RJCode), orNone(album.Circle), orNone(album.Date))
@@ -97,9 +99,6 @@ func runDownload(cmd *cobra.Command, args []string) error {
 
 	chapters := chaptersFor(cmd, album)
 	split := splitting(chapters)
-	if split {
-		cmd.Printf("[info] cutting the stream into its %s\n", plural(len(chapters), "chapter"))
-	}
 
 	tmpl, err := templateFor(given, split, len(album.Tracks))
 	if err != nil {
@@ -111,7 +110,6 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
-	cmd.Printf("[info] saving to %s\n", dir)
 
 	width := naming.Width(len(album.Tracks))
 	jobs := make([]downloader.Job, 0, len(album.Tracks))
@@ -129,10 +127,11 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	coverPath := fetchCover(ctx, cmd, sess, album, dir)
-	fetchImages(ctx, cmd, sess, album, dir)
-
 	prog := downloader.NewProgress(cmd.OutOrStdout())
+
+	coverPath := fetchCover(ctx, cmd, sess, album, dir)
+	fetchImages(ctx, cmd, sess, album, dir, prog)
+
 	d := &downloader.Downloader{
 		Client:       sess.client,
 		UserAgent:    sess.userAgent,
@@ -144,8 +143,12 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		Chapters:     chapters,
 		Split:        split,
 		OnCoverError: func(name string, err error) { cmd.PrintErrf("[warn] %s: %v\n", name, err) },
-		OnStart:      prog.Start,
-		OnProgress:   prog.Update,
+		OnChapterDropped: func(name string, start, total time.Duration) {
+			cmd.PrintErrf("[warn] chapter %s begins at %s, past the end of a %s stream; skipped\n",
+				name, start.Round(time.Second), total.Round(time.Second))
+		},
+		OnStart:    prog.Start,
+		OnProgress: prog.Update,
 	}
 
 	debugf(cmd, "%d files at once, %d requests in flight, %d retries each", concurrency, connections, retries)
@@ -154,7 +157,10 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	// Drain the renderer first, or it fights the summary for the same lines.
 	prog.Wait()
 
-	return report(cmd, results)
+	if split {
+		cmd.Printf("[progress] cutting the stream into its %s\n", plural(len(chapters), "chapter"))
+	}
+	return report(cmd, dir, results)
 }
 
 // session is the client and the User-Agent it presents. cf_clearance is bound to
@@ -478,7 +484,7 @@ func fetchCover(ctx context.Context, cmd *cobra.Command, s session, album *scrap
 
 // fetchImages saves the rest of the post's gallery beside the jacket. Best
 // effort, like the cover: pictures are not what the run is for.
-func fetchImages(ctx context.Context, cmd *cobra.Command, s session, album *scraper.Album, dir string) {
+func fetchImages(ctx context.Context, cmd *cobra.Command, s session, album *scraper.Album, dir string, prog *downloader.Progress) {
 	if noImages {
 		return
 	}
@@ -496,25 +502,25 @@ func fetchImages(ctx context.Context, cmd *cobra.Command, s session, album *scra
 		return
 	}
 
+	prog.StartCount(imagesLabel, int64(len(urls)))
 	paths := downloader.FetchImages(ctx, s.client, s.userAgent, urls, album.PageURL, dir,
+		func(done, total int) { prog.Update(imagesLabel, int64(done), int64(total)) },
 		func(err error) { cmd.PrintErrf("[warn] image not saved: %v\n", err) })
-	if len(paths) > 0 {
-		cmd.Printf("[info] %s saved to %s\n", plural(len(paths), "image"), filepath.Dir(paths[0]))
-	}
+	debugf(cmd, "gallery: %d saved", len(paths))
 }
 
-// reportSource warns when a post offers only its stream.
+// reportSource names what the post serves its audio as.
 func reportSource(cmd *cobra.Command, album *scraper.Album) {
-	if album.Source() != scraper.SourceHLS {
-		return
+	kind := "file"
+	if album.Source() == scraper.SourceHLS {
+		kind = "stream"
 	}
-	cmd.PrintErrln("[warn] this post serves no audio file, only the site's stream, so the")
-	cmd.PrintErrln("[warn] audio is reassembled from it and ffmpeg is required")
+	cmd.Printf("[info] source: %s\n", kind)
 }
 
 // report lists the failures and returns an error only if every download failed.
 // One download can leave several files behind, so the two are counted apart.
-func report(cmd *cobra.Command, results []downloader.Result) error {
+func report(cmd *cobra.Command, dir string, results []downloader.Result) error {
 	var failed, files int
 	for _, r := range results {
 		if r.Err != nil {
@@ -529,9 +535,9 @@ func report(cmd *cobra.Command, results []downloader.Result) error {
 	case failed == len(results):
 		return fmt.Errorf("all %s failed", plural(failed, "download"))
 	case failed > 0:
-		cmd.Printf("[done] %s, %s failed\n", plural(files, "file"), plural(failed, "download"))
+		cmd.Printf("[done] %s saved to %s, %s failed\n", plural(files, "recording"), dir, plural(failed, "download"))
 	default:
-		cmd.Printf("[done] %s\n", plural(files, "file"))
+		cmd.Printf("[done] %s saved to %s\n", plural(files, "recording"), dir)
 	}
 	return nil
 }

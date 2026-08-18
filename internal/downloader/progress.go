@@ -55,6 +55,14 @@ func NewProgress(w io.Writer) *Progress {
 // existing line is reused rather than duplicated. A non-positive total means
 // the size is not known yet; Update adopts the real one when it arrives.
 func (b *Progress) Start(name string, total int64) {
+	b.start(name, total, decor.CountersKibiByte("% .1f / % .1f", decor.WC{W: sizeCols, C: decor.DindentRight}))
+}
+
+func (b *Progress) StartCount(name string, total int64) {
+	b.start(name, total, decor.CountersNoUnit("%d / %d", decor.WC{W: sizeCols, C: decor.DindentRight}))
+}
+
+func (b *Progress) start(name string, total int64, counters decor.Decorator) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -73,7 +81,7 @@ func (b *Progress) Start(name string, total int64) {
 			decor.Name(" "), // the name column clips flush, so separate it here
 			decor.Percentage(decor.WC{W: 5}),
 			decor.Name("  "),
-			decor.CountersKibiByte("% .1f / % .1f", decor.WC{W: sizeCols, C: decor.DindentRight}),
+			counters,
 			decor.Name(" "),
 			eta(),
 		),
