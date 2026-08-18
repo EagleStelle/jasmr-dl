@@ -346,7 +346,16 @@ func rooted(dir string) bool {
 	return filepath.IsAbs(dir) ||
 		filepath.VolumeName(dir) != "" ||
 		strings.HasPrefix(dir, "/") ||
-		strings.HasPrefix(dir, `\`)
+		strings.HasPrefix(dir, `\`) ||
+		hasDriveLetter(dir)
+}
+
+func hasDriveLetter(dir string) bool {
+	if len(dir) < 2 || dir[1] != ':' {
+		return false
+	}
+	c := dir[0]
+	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
 }
 
 // templateFor keeps the template the run was given, or picks the default the

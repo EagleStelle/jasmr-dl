@@ -81,7 +81,7 @@ func Parse(raw string) (*Template, error) {
 		return nil, errors.New("output template is empty")
 	}
 
-	parts := strings.Split(filepath.ToSlash(raw), "/")
+	parts := strings.Split(strings.ReplaceAll(raw, `\`, "/"), "/")
 	// A trailing separator names no file, so the segment before it does.
 	for len(parts) > 1 && parts[len(parts)-1] == "" {
 		parts = parts[:len(parts)-1]
