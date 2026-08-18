@@ -1,17 +1,20 @@
 package naming
 
-import "testing"
-
-const (
-	trackDefault   = "{year}/{rjcode}/{rjcode}_{number}.{ext}"
-	chapterDefault = "{year}/{rjcode}/{number}_{chapter}.{ext}"
+import (
+	"strings"
+	"testing"
 )
 
-func def(split bool) string {
+// defaultBranch splits Default by hand, so the expectation owes nothing to the
+// code under test.
+func defaultBranch(split bool) string {
+	open := strings.IndexByte(Default, '<')
+	shut := strings.IndexByte(Default, '>')
+	branches := strings.Split(Default[open+1:shut], "|")
 	if split {
-		return chapterDefault
+		return Default[:open] + branches[1] + Default[shut+1:]
 	}
-	return trackDefault
+	return Default[:open] + branches[0] + Default[shut+1:]
 }
 
 func TestSelectDividesOnTheGroup(t *testing.T) {
@@ -24,7 +27,7 @@ func TestSelectDividesOnTheGroup(t *testing.T) {
 		{false, "{year}/{circle}/{rjcode}_{number}.{ext}"},
 		{true, "{year}/{circle}/{number}_{chapter}.{ext}"},
 	} {
-		got, err := Select(raw, tc.split, def(tc.split))
+		got, err := Select(raw, tc.split)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -38,7 +41,7 @@ func TestSelectDividesOnTheGroup(t *testing.T) {
 func TestSelectDividesAWholePath(t *testing.T) {
 	const raw = "<{year}/{title}/{rjcode}_{number}.{ext}|{date}/{rjcode}/{number}_{chapter}.{ext}>"
 
-	got, err := Select(raw, true, chapterDefault)
+	got, err := Select(raw, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,12 +56,12 @@ func TestSelectKeepsTheDefaultBranch(t *testing.T) {
 		split bool
 		want  string
 	}{
-		{"<*|{number}_{chapter}.{ext}>", false, trackDefault},
+		{"<*|{number}_{chapter}.{ext}>", false, defaultBranch(false)},
 		{"<*|{number}_{chapter}.{ext}>", true, "{number}_{chapter}.{ext}"},
 		{"<{title}/{number}.{ext}|*>", false, "{title}/{number}.{ext}"},
-		{"<{title}/{number}.{ext}|*>", true, chapterDefault},
+		{"<{title}/{number}.{ext}|*>", true, defaultBranch(true)},
 	} {
-		got, err := Select(tc.raw, tc.split, def(tc.split))
+		got, err := Select(tc.raw, tc.split)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,7 +75,7 @@ func TestSelectLeavesATemplateWithNoGroup(t *testing.T) {
 	const raw = `F:\Music\{rjcode}\{title}.{ext}`
 
 	for _, split := range []bool{false, true} {
-		got, err := Select(raw, split, def(split))
+		got, err := Select(raw, split)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -87,7 +90,7 @@ func TestSelectLeavesATemplateWithNoGroup(t *testing.T) {
 func TestSelectBranchesMayBeRooted(t *testing.T) {
 	const raw = "<C:/Audio/{rjcode}_{number}.{ext}|D:/Audio/{number}_{chapter}.{ext}>"
 
-	got, err := Select(raw, true, chapterDefault)
+	got, err := Select(raw, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +102,7 @@ func TestSelectBranchesMayBeRooted(t *testing.T) {
 func TestSelectResolvesEveryGroup(t *testing.T) {
 	const raw = "{year}/<{rjcode}|{date}>/<{number}.{ext}|{number}_{chapter}.{ext}>"
 
-	got, err := Select(raw, true, chapterDefault)
+	got, err := Select(raw, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +112,7 @@ func TestSelectResolvesEveryGroup(t *testing.T) {
 }
 
 func TestSelectTrimsAroundBranches(t *testing.T) {
-	got, err := Select("< {title}.{ext} | {chapter}.{ext} >", false, trackDefault)
+	got, err := Select("< {title}.{ext} | {chapter}.{ext} >", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +137,7 @@ func TestSelectRejectsBadGroups(t *testing.T) {
 		"<{title}*.{ext}|{chapter}.{ext}>", // stray * in a branch
 	} {
 		for _, split := range []bool{false, true} {
-			if _, err := Select(raw, split, def(split)); err == nil {
+			if _, err := Select(raw, split); err == nil {
 				t.Errorf("Select(%q, split=%v) succeeded, want an error", raw, split)
 			}
 		}
@@ -143,7 +146,7 @@ func TestSelectRejectsBadGroups(t *testing.T) {
 
 // A group resolves to a template Parse reads like any other.
 func TestSelectedBranchParses(t *testing.T) {
-	raw, err := Select("{year}/<{rjcode}_{number}.{ext}|{number}_{chapter}.{ext}>", true, chapterDefault)
+	raw, err := Select("{year}/<{rjcode}_{number}.{ext}|{number}_{chapter}.{ext}>", true)
 	if err != nil {
 		t.Fatal(err)
 	}

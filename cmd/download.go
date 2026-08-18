@@ -366,16 +366,12 @@ func hasDriveLetter(dir string) bool {
 // templateFor resolves the template a run writes from. files is how many names
 // it has to keep apart.
 func templateFor(given string, split bool, files int) (*naming.Template, error) {
-	def := defaultTemplate
-	if split {
-		def = defaultSplitTemplate
-	}
-	raw := def
+	raw := naming.Default
 	if given != "" {
 		raw = given
 	}
 
-	chosen, err := naming.Select(raw, split, def)
+	chosen, err := naming.Select(raw, split)
 	if err != nil {
 		return nil, err
 	}

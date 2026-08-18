@@ -5,6 +5,9 @@ import (
 	"strings"
 )
 
+// Default puts every post under its year and RJ code, with a leaf per shape.
+const Default = "{year}/{rjcode}/<{rjcode}_{number}.{ext}|{number}_{chapter}.{ext}>"
+
 // One -o value may name a template for each shape a post takes: <A|B> uses A
 // per track and B per chapter, a branch of * keeping that side's default.
 // util.Sanitize already replaces all four characters in every substituted
@@ -17,9 +20,14 @@ const (
 )
 
 // Select resolves the <…> groups in raw, keeping the branch this run calls for.
-// split takes the right branch. A branch of "*" stands for def, which only fits
-// where the group is the whole template, since def names a path of its own.
-func Select(raw string, split bool, def string) (string, error) {
+// split takes the right branch. A branch of "*" stands for Default, which only
+// fits where the group is the whole template, since Default names a path of its
+// own.
+func Select(raw string, split bool) (string, error) {
+	return resolve(raw, split, true)
+}
+
+func resolve(raw string, split, allowDefault bool) (string, error) {
 	raw = strings.TrimSpace(raw)
 	whole := len(raw) > 1 && raw[0] == groupOpen &&
 		strings.IndexByte(raw, groupClose) == len(raw)-1
@@ -45,7 +53,7 @@ func Select(raw string, split bool, def string) (string, error) {
 		}
 		shut += open
 
-		branch, err := pick(rest[open+1:shut], split, def, whole)
+		branch, err := pick(rest[open+1:shut], split, whole, allowDefault)
 		if err != nil {
 			return "", err
 		}
@@ -54,7 +62,7 @@ func Select(raw string, split bool, def string) (string, error) {
 	}
 }
 
-func pick(body string, split bool, def string, whole bool) (string, error) {
+func pick(body string, split, whole, allowDefault bool) (string, error) {
 	if strings.ContainsRune(body, groupOpen) {
 		return "", fmt.Errorf("%c…%c groups cannot nest, in %q", groupOpen, groupClose, body)
 	}
@@ -79,6 +87,10 @@ func pick(body string, split bool, def string, whole bool) (string, error) {
 	// Both branches are checked, not just the one taken.
 	for _, p := range parts {
 		if p == useDefault {
+			if !allowDefault {
+				return "", fmt.Errorf("%q stands for the default template, so it cannot appear inside it",
+					useDefault)
+			}
 			if !whole {
 				return "", fmt.Errorf("%q stands for the whole default template, so it cannot sit inside a longer one",
 					useDefault)
@@ -95,7 +107,7 @@ func pick(body string, split bool, def string, whole bool) (string, error) {
 		chosen = parts[1]
 	}
 	if chosen == useDefault {
-		return def, nil
+		return resolve(Default, split, false)
 	}
 	return chosen, nil
 }

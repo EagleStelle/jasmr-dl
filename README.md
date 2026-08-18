@@ -65,6 +65,7 @@ absolute.
 ```
 jasmr-dl https://japaneseasmr.com/12345/ -o "{circle}/{rjcode}/{number}. {chapter}.{ext}"
 jasmr-dl https://japaneseasmr.com/12345/ -o "C:/Audio/{year}/{title}/{rjcode}_{number}.{ext}"
+jasmr-dl https://japaneseasmr.com/12345/ -o "<*|{number}_{chapter} [{circle}].{ext}>"
 jasmr-dl https://japaneseasmr.com/12345/ -P ./out
 jasmr-dl https://japaneseasmr.com/12345/ -P ./out -o "{rjcode}/{number}.{ext}"
 ```
@@ -84,8 +85,9 @@ jasmr-dl https://japaneseasmr.com/12345/ -P ./out -o "{rjcode}/{number}.{ext}"
 A field the post does not carry writes `Unknown`. `{number}`, `{chapter}`,
 `{track}`, `{tracktotal}` and `{ext}` belong to the filename, not a directory.
 
-The defaults are `{year}/{rjcode}/{rjcode}_{number}.{ext}` per track and
-`{year}/{rjcode}/{number}_{chapter}.{ext}` per chapter.
+The default is `{year}/{rjcode}/<{rjcode}_{number}.{ext}|{number}_{chapter}.{ext}>`,
+written in the same divider syntax `-o` takes: the same directory either way, a
+leaf per shape.
 
 Cover art and the gallery follow the audio: `jacket.jpg` beside it, the rest
 under `images/`.
@@ -139,10 +141,10 @@ The stream is cut into one file per chapter.
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `-o, --output` | `{year}/{rjcode}/{rjcode}_{number}.{ext}` | Template naming each file and the directories above it; `<A\|B>` uses `A` per track, `B` per chapter |
+| `-o, --output` | `{year}/{rjcode}/<{rjcode}_{number}.{ext}\|{number}_{chapter}.{ext}>` | Template naming each file and the directories above it; `<A\|B>` uses `A` per track, `B` per chapter |
 | `-P, --paths` | | Directory everything is written under |
 | `-N, --concurrency` | `3` | Files downloaded at once |
-| `-j, --connections` | `32` | Ranged requests in flight; this is what sets speed (max 128) |
+| `-j, --connections` | `32` | Ranged requests in flight (max 128) |
 | `-R, --retries` | `4` | Retry attempts per ranged request |
 | `-c, --cookies` | | Path to a `cookies.txt` export, saved for later runs |
 | `--use-browser` | | Path to a browser executable that clears a Cloudflare challenge |
@@ -165,6 +167,10 @@ Without them, use `-C -T -H` to download the audio untouched. Stream-only posts 
 When a challenge appears, jasmr-dl opens a browser to clear it, writes `cookies.txt` beside the binary, and reuses it on later runs. Point `--use-browser` at an executable if none is found, and pass `--show-browser` to watch it.
 
 If that fails, open the post in your own browser, export its cookies as `cookies.txt`, and leave the file beside the binary. Pass a path with `-c` once and it is copied into place.
+
+```
+jasmr-dl https://japaneseasmr.com/12345/ -c C:\path\cookies.txt
+```
 
 ## Build
 

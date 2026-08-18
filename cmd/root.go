@@ -8,6 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/EagleStelle/jasmr-dl/internal/naming"
 )
 
 // version is the build revision. A release build replaces it via -ldflags -X,
@@ -31,14 +33,6 @@ func resolveVersion() string {
 	return strings.TrimPrefix(bi.Main.Version, "v")
 }
 
-// The defaults put every post under its year and RJ code. What a post holds
-// decides the leaf: parts of a work carry its code, chapters cut out of one
-// stream carry their own titles.
-const (
-	defaultTemplate      = "{year}/{rjcode}/{rjcode}_{number}.{ext}"
-	defaultSplitTemplate = "{year}/{rjcode}/{number}_{chapter}.{ext}"
-)
-
 var (
 	outputTmpl  string
 	basePath    string
@@ -59,11 +53,22 @@ var (
 var rootCmd = &cobra.Command{
 	Use:     "jasmr-dl <url>",
 	Version: resolveVersion(),
+	Short:   "Download audio from a japaneseasmr.com post, tagged and with cover art",
+	Long: "Download audio from a japaneseasmr.com post, tagged and with cover art.\n\n" +
+		"Output template (-o):\n" +
+		"  directories  {title} {rjcode} {circle} {artist} {date} {year} {month} {day}\n" +
+		"  filename     all of the above, plus {number} {chapter} {track} {tracktotal} {ext}\n\n" +
+		"  <A|B> names a template per shape: A per track, B per chapter, and * on\n" +
+		"  either side keeps that side's default. Quote the whole template, since\n" +
+		"  < > | * are shell syntax.\n\n" +
+		"  default  " + naming.Default,
 	Example: "  jasmr-dl https://japaneseasmr.com/12345/\n" +
-		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"./out/{title}/{rjcode}_{number}.{ext}\" -N 8\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ -j 64 -N 8\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"{circle}/{rjcode}/{number}. {chapter}.{ext}\"\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"C:/Audio/{year}/{title}/{rjcode}_{number}.{ext}\"\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"<*|{number}_{chapter} [{circle}].{ext}>\"\n" +
-		"  jasmr-dl https://japaneseasmr.com/12345/ --no-split --no-cover\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ -P ./out -o \"{rjcode}/{number}.{ext}\"\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ -C -I -T\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -c C:\\path\\cookies.txt",
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -86,11 +91,11 @@ func Execute() {
 
 func init() {
 	f := rootCmd.PersistentFlags()
-	f.StringVarP(&outputTmpl, "output", "o", defaultTemplate,
-		"template naming each file and the directories above it; <A|B> uses A per track, B per chapter")
+	f.StringVarP(&outputTmpl, "output", "o", "",
+		"template naming each file and the directories above it")
 	f.StringVarP(&basePath, "paths", "P", "", "directory everything is written under")
 	f.IntVarP(&concurrency, "concurrency", "N", 3, "files downloaded at once")
-	f.IntVarP(&connections, "connections", "j", 32, "ranged requests in flight; this is what sets speed (max 128)")
+	f.IntVarP(&connections, "connections", "j", 32, "ranged requests in flight (max 128)")
 	f.IntVarP(&retries, "retries", "R", 4, "retry attempts per ranged request")
 	f.StringVarP(&cookieFile, "cookies", "c", "", "path to a cookies.txt export, saved for later runs")
 	f.StringVar(&browserPath, "use-browser", "", "path to a browser executable that clears a Cloudflare challenge")
