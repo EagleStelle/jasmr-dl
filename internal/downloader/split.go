@@ -93,13 +93,12 @@ func (d *Downloader) cut(ctx context.Context, ffmpeg, src, dst string, start, le
 // piecePaths names one file per chapter.
 func (d *Downloader) piecePaths(f naming.Fields) []string {
 	f.Ext = strings.TrimPrefix(hlsOutputExt, ".")
-	f.Width = naming.Width(len(d.Chapters))
-	f.TrackTotal = len(d.Chapters)
+	f.Total = len(d.Chapters)
 
 	paths := make([]string, len(d.Chapters))
 	for i, c := range d.Chapters {
 		g := f
-		g.Number, g.Track = i+1, i+1
+		g.Number = i + 1
 		g.Chapter = c.Title
 		paths[i] = filepath.Join(d.OutputDir, streamName(d.Template.File(g)))
 	}

@@ -14,7 +14,7 @@ func fields(n, total int) naming.Fields {
 		Chapter: "耳かき",
 		Ext:     "mp3",
 		Number:  n,
-		Width:   naming.Width(total),
+		Total:   total,
 	}
 }
 

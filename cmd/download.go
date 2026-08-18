@@ -112,18 +112,17 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create output directory: %w", err)
 	}
 
-	width := naming.Width(len(album.Tracks))
 	jobs := make([]downloader.Job, 0, len(album.Tracks))
 	for i, t := range album.Tracks {
 		f := fields
-		f.Number, f.Width = i+1, width
+		f.Number, f.Total = i+1, len(album.Tracks)
 		jobs = append(jobs, downloader.Job{
 			Name:       t.Title,
 			LinkURL:    t.LinkURL,
 			Source:     t.Source,
 			Alternates: t.Alternates,
 			Referer:    album.PageURL,
-			Tags:       tagsFor(album, t),
+			Tags:       tagsFor(album, t, i+1),
 			Fields:     f,
 		})
 	}
@@ -402,16 +401,14 @@ func templateFor(given string, split bool, files int) (*naming.Template, error) 
 func fieldsFor(album *scraper.Album) naming.Fields {
 	year, month, day := splitDate(album.Date)
 	return naming.Fields{
-		Title:      album.Title,
-		RJCode:     album.RJCode,
-		Circle:     album.Circle,
-		Artist:     album.Artists,
-		Date:       album.Date,
-		Year:       year,
-		Month:      month,
-		Day:        day,
-		Track:      1,
-		TrackTotal: 1,
+		Title:  album.Title,
+		RJCode: album.RJCode,
+		Circle: album.Circle,
+		Artist: album.Artists,
+		Date:   album.Date,
+		Year:   year,
+		Month:  month,
+		Day:    day,
 	}
 }
 
@@ -430,9 +427,9 @@ func splitting(chapters []scraper.Chapter) bool {
 	return !noSplit && len(chapters) > 0
 }
 
-// tagsFor builds the metadata written into one file. A split overrides the
-// title and track number per chapter.
-func tagsFor(album *scraper.Album, track scraper.Track) downloader.Tags {
+// tagsFor builds the metadata written into one file, n being its place in the
+// post. A split overrides the title and track number per chapter.
+func tagsFor(album *scraper.Album, track scraper.Track, n int) downloader.Tags {
 	if noTags {
 		return downloader.Tags{}
 	}
@@ -444,8 +441,8 @@ func tagsFor(album *scraper.Album, track scraper.Track) downloader.Tags {
 		Date:        album.Date,
 		Genre:       genre,
 		Comment:     album.PageURL,
-		Track:       1,
-		TrackTotal:  1,
+		Track:       n,
+		TrackTotal:  len(album.Tracks),
 		Disc:        1,
 		DiscTotal:   1,
 	}
