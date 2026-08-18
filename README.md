@@ -117,14 +117,24 @@ A branch of `*` keeps that side's default. Both branches cannot be `*`.
 ### Numbering
 
 A template that names `{number}` places it. One that does not takes it leading
-where each file is a chapter, trailing where each is a track, and not at all
-where the post holds a single file. Given `-o "{year}/{title}.{ext}"`:
+where each file is a chapter, trailing where each is a track. A post holding a
+single file has nothing to count, so the counter and the separator beside it are
+dropped either way.
+
+Given `-o "{year}/{title}.{ext}"`:
 
 | Post | Writes |
 | --- | --- |
 | One file | `2024/ある夏の日.mp3` |
 | A file per track | `2024/ある夏の日_2.mp3` |
 | A file per chapter | `2024/2_ある夏の日.mp3` |
+
+Given `-o "{year}/{title} - {number}.{ext}"`:
+
+| Post | Writes |
+| --- | --- |
+| One file | `2024/ある夏の日.mp3` |
+| A file per track | `2024/ある夏の日 - 2.mp3` |
 
 ## Chapters
 

@@ -34,7 +34,8 @@ const (
 
 	genre = "ASMR"
 
-	imagesLabel = "images"
+	imagesLabel   = "images"
+	chaptersLabel = "chapters"
 
 	// partSeparator joins a work to the part one file holds.
 	partSeparator = " - "
@@ -147,8 +148,10 @@ func runDownload(cmd *cobra.Command, args []string) error {
 			cmd.PrintErrf("[warn] chapter %s begins at %s, past the end of a %s stream; skipped\n",
 				name, start.Round(time.Second), total.Round(time.Second))
 		},
-		OnStart:    prog.Start,
-		OnProgress: prog.Update,
+		OnStart:         prog.Start,
+		OnProgress:      prog.Update,
+		OnSplitStart:    func(total int) { prog.StartCount(chaptersLabel, int64(total)) },
+		OnSplitProgress: func(done, total int) { prog.Update(chaptersLabel, int64(done), int64(total)) },
 	}
 
 	debugf(cmd, "%d files at once, %d requests in flight, %d retries each", concurrency, connections, retries)
@@ -157,9 +160,6 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	// Drain the renderer first, or it fights the summary for the same lines.
 	prog.Wait()
 
-	if split {
-		cmd.Printf("[progress] cutting the stream into its %s\n", plural(len(chapters), "chapter"))
-	}
 	return report(cmd, dir, results)
 }
 
@@ -386,10 +386,13 @@ func templateFor(given string, split bool, files int) (*naming.Template, error) 
 	// carries one where the post holds more than one, and a template that
 	// places {number} itself is left to say where. Without this a custom -o
 	// naming no counter would write every file of a post to one name.
-	if split {
+	switch {
+	case split:
 		chosen = naming.WithNumber(chosen, true)
-	} else if files > 1 {
+	case files > 1:
 		chosen = naming.WithNumber(chosen, false)
+	default:
+		chosen = naming.WithoutNumber(chosen)
 	}
 	return naming.Parse(chosen)
 }

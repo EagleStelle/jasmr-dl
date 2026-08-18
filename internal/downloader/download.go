@@ -74,6 +74,14 @@ type Downloader struct {
 
 	// OnCoverError reports art that could not be attached; the audio is fine.
 	OnCoverError func(name string, err error)
+
+	// OnChapterDropped reports a chapter the stream ends before, whose file or
+	// marker is never written.
+	OnChapterDropped func(name string, start, total time.Duration)
+
+	// OnSplitStart opens the chapter counter, OnSplitProgress advances it.
+	OnSplitStart    func(total int)
+	OnSplitProgress func(done, total int)
 }
 
 // Download fetches one job, resuming a partial file if one is present. It

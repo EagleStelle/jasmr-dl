@@ -339,22 +339,19 @@ func (s *segmentSizes) stat() (done, total int64) {
 	return s.bytes, total
 }
 
-// remux concatenates the segments; 2000-odd paths need a list file.
+const joinedName = "joined.ts"
+
+// remux joins the segments into one transport stream and rewrites it as .m4a.
 func (d *Downloader) remux(ctx context.Context, ffmpeg, dir string, paths []string, final string) error {
-	list := filepath.Join(dir, "segments.txt")
-	var b strings.Builder
-	for _, p := range paths {
-		// concat resolves paths against the list file, so basenames suffice.
-		b.WriteString("file '" + strings.ReplaceAll(filepath.Base(p), "'", `'\''`) + "'\n")
-	}
-	if err := os.WriteFile(list, []byte(b.String()), 0o644); err != nil {
-		return permanent(err)
+	joined := filepath.Join(dir, joinedName)
+	if err := joinSegments(paths, joined); err != nil {
+		return err
 	}
 
 	staged := final + ".part"
 	// The .part suffix hides the extension ffmpeg infers the format from.
 	out, err := runFFmpeg(ctx, ffmpeg, slices.Concat(ffmpegQuiet, []string{
-		"-f", "concat", "-safe", "0", "-i", list,
+		"-i", joined,
 		"-c", "copy", "-movflags", "+faststart",
 		"-f", hlsOutputFormat, staged,
 	})...)
@@ -362,7 +359,41 @@ func (d *Downloader) remux(ctx context.Context, ffmpeg, dir string, paths []stri
 		os.Remove(staged)
 		return fmt.Errorf("ffmpeg: %w: %s", err, out)
 	}
+	os.Remove(joined)
 	return os.Rename(staged, final)
+}
+
+// joinSegments writes the segments into dst in playlist order, removing dst if
+// it cannot finish.
+func joinSegments(paths []string, dst string) error {
+	err := writeJoined(paths, dst)
+	if err != nil {
+		os.Remove(dst)
+	}
+	return err
+}
+
+// writeJoined copies every segment into one open file.
+func writeJoined(paths []string, dst string) error {
+	out, err := os.Create(dst)
+	if err != nil {
+		return permanent(err)
+	}
+	defer out.Close()
+
+	buf := make([]byte, 1<<20)
+	for _, p := range paths {
+		in, err := os.Open(p)
+		if err != nil {
+			return err
+		}
+		_, err = io.CopyBuffer(out, in, buf)
+		in.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return out.Close()
 }
 
 // ffmpegQuiet suppresses the banner and never stops on a prompt. Every call to

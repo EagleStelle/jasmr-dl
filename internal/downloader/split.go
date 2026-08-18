@@ -40,25 +40,30 @@ func (d *Downloader) splitStream(ctx context.Context, job Job, tools ffmpegPair)
 		return nil, err
 	}
 
+	d.reportOverrun(d.Chapters, total)
+
+	if d.OnSplitStart != nil {
+		d.OnSplitStart(len(pieces))
+	}
+
 	var written []string
 	for i, path := range pieces {
-		start := d.Chapters[i].Start
-		end := total
-		if i+1 < len(d.Chapters) {
-			end = d.Chapters[i+1].Start
-		}
-		if end <= start {
-			continue
-		}
-		if err := d.cut(ctx, tools.ffmpeg, full, path, start, end-start); err != nil {
-			return nil, err
-		}
+		start, end, ok := chapterSpan(d.Chapters, i, total)
+		if ok {
+			if err := d.cut(ctx, tools.ffmpeg, full, path, start, end-start); err != nil {
+				return nil, err
+			}
 
-		tags := pieceTags(job.Tags, d.Chapters[i].Title, i+1, len(d.Chapters))
-		if err := d.tag(ctx, tags, nil, path); err != nil && d.OnCoverError != nil {
-			d.OnCoverError(filepath.Base(path), err)
+			tags := pieceTags(job.Tags, d.Chapters[i].Title, i+1, len(d.Chapters))
+			if err := d.tag(ctx, tags, nil, path); err != nil && d.OnCoverError != nil {
+				d.OnCoverError(filepath.Base(path), err)
+			}
+			written = append(written, path)
 		}
-		written = append(written, path)
+		// By position, so a dropped chapter still advances.
+		if d.OnSplitProgress != nil {
+			d.OnSplitProgress(i+1, len(pieces))
+		}
 	}
 	if len(written) == 0 {
 		return nil, permanent(fmt.Errorf("no chapter of %q has any length", full))

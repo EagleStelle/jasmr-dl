@@ -90,6 +90,29 @@ func TestTemplateForNumbersWhatTheTemplateDoesNot(t *testing.T) {
 	}
 }
 
+// A post of one file has nothing to count, so a template naming a counter
+// writes without it.
+func TestTemplateForDropsTheNumberOnASingleFile(t *testing.T) {
+	for _, tc := range []struct {
+		given string
+		want  string
+	}{
+		{"", "RJ123456.mp3"},
+		{"{year}/{title} - {number}.{ext}", "ある夏の日.mp3"},
+		{"{year}/{number}. {title}.{ext}", "ある夏の日.mp3"},
+		{"{year}/{title} ({number}).{ext}", "ある夏の日.mp3"},
+		{"{year}/{number}.{ext}", "1.mp3"},
+	} {
+		tmpl, err := templateFor(tc.given, false, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := tmpl.File(fields(1, 1)); got != tc.want {
+			t.Errorf("templateFor(%q): File = %q, want %q", tc.given, got, tc.want)
+		}
+	}
+}
+
 func TestTemplateForRejectsABadTemplate(t *testing.T) {
 	for _, given := range []string{
 		"{nope}.{ext}",
