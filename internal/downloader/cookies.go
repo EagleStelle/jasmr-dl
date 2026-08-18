@@ -39,8 +39,8 @@ func (c Cookie) Host() string { return strings.TrimPrefix(c.Domain, ".") }
 // Wildcard reports whether the cookie reaches subdomains.
 func (c Cookie) Wildcard() bool { return strings.HasPrefix(c.Domain, ".") }
 
-// LoadCookies reads a Netscape cookies.txt file, the format curl, wget, yt-dlp
-// and browser export extensions share, plus the User-Agent recorded beside them
+// LoadCookies reads a Netscape cookies.txt file, the format curl, wget and
+// browser export extensions share, plus the User-Agent recorded beside them
 // when this tool wrote the file.
 //
 // cf_clearance is bound to the IP and User-Agent that cleared the challenge, so a

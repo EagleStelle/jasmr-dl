@@ -3,10 +3,11 @@
 Download audio from [japaneseasmr.com](https://japaneseasmr.com) posts, tagged and with cover art.
 
 - Downloads every part of a post in parallel
-- Embeds cover art and writes title, artist, circle, RJ code and date
-- Embeds the track list as chapters when one file holds the whole work
+- Embeds cover art and writes title, artist, circle, RJ code, date and track numbers
+- Cuts a chaptered stream into one file per chapter
 - Saves the post's image gallery alongside the audio
 - Handles posts that serve only the site's stream
+- Names files and directories from a template
 - Clears Cloudflare challenges in a browser and reuses the clearance
 
 ## Install
@@ -25,10 +26,20 @@ go install github.com/EagleStelle/jasmr-dl@latest
 jasmr-dl https://japaneseasmr.com/12345/
 ```
 
-Files land in a directory named after the post. Override with `-o`:
+Files land under the post's year and RJ code:
 
 ```
-jasmr-dl https://japaneseasmr.com/12345/ -o ./out
+2024/RJ123456/RJ123456_1.mp3
+2024/RJ123456/RJ123456_2.mp3
+2024/RJ123456/jacket.jpg
+2024/RJ123456/images/01.jpg
+```
+
+A post that serves a chaptered stream is cut into its chapters instead:
+
+```
+2024/RJ123456/01_はじめに.m4a
+2024/RJ123456/02_耳かき.m4a
 ```
 
 Go faster with more ranged requests in flight, and more files at once:
@@ -45,21 +56,69 @@ jasmr-dl https://japaneseasmr.com/12345/ -C -I -T
 
 `Ctrl+C` cancels. Exit status is non-zero only when every file fails.
 
+## Output template
+
+`-o` holds the path and the filename together. Its last segment always names the
+file, anything before it names directories, and the path may be relative or
+absolute.
+
+```
+jasmr-dl https://japaneseasmr.com/12345/ -o "{circle}/{rjcode}/{number}. {chapter}.{ext}"
+jasmr-dl https://japaneseasmr.com/12345/ -o "C:/Audio/{year}/{title}/{rjcode}_{number}.{ext}"
+jasmr-dl https://japaneseasmr.com/12345/ -P ./out
+jasmr-dl https://japaneseasmr.com/12345/ -P ./out -o "{rjcode}/{number}.{ext}"
+```
+
+| Field | Names |
+| --- | --- |
+| `{title}` | Post title |
+| `{rjcode}` | DLsite code |
+| `{circle}` | Circle |
+| `{artist}` | Voice actor |
+| `{date}` `{year}` `{month}` `{day}` | Post date |
+| `{number}` | File number |
+| `{chapter}` | Chapter title |
+| `{track}` `{tracktotal}` | Track number |
+| `{ext}` | File extension |
+
+A field the post does not carry writes `Unknown`. `{number}`, `{chapter}`,
+`{track}`, `{tracktotal}` and `{ext}` belong to the filename, not a directory.
+
+The default is `{year}/{rjcode}/{rjcode}_{number}.{ext}`, except where a stream
+is cut into chapters, which defaults to `{year}/{rjcode}/{number}_{chapter}.{ext}`.
+Passing `-o` replaces both.
+
+Cover art and the gallery follow the audio: `jacket.jpg` beside it, the rest
+under `images/`.
+
+## Chapters
+
+A post serves either separate files, or one stream with a track list beside it.
+The stream is cut into one file per chapter.
+
+| | |
+| --- | --- |
+| default | One file per chapter |
+| `-S` | One file, the track list embedded as chapters |
+| `-H` | One file, no chapter metadata at all |
+
 ## Options
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `-o, --output` | post title | Download directory |
+| `-o, --output` | `{year}/{rjcode}/{rjcode}_{number}.{ext}` | Template naming each file and the directories above it |
+| `-P, --paths` | | Directory everything is written under |
 | `-N, --concurrency` | `3` | Files downloaded at once |
 | `-j, --connections` | `32` | Ranged requests in flight; this is what sets speed (max 128) |
 | `-R, --retries` | `4` | Retry attempts per ranged request |
 | `-c, --cookies` | | Path to a `cookies.txt` export, saved for later runs |
-| `--use-browser` | | Browser executable used to clear a Cloudflare challenge |
+| `--use-browser` | | Path to a browser executable that clears a Cloudflare challenge |
 | `--show-browser` | `false` | Show that browser instead of running it headless |
 | `-C, --no-cover` | `false` | Do not embed cover art |
-| `-I, --no-images` | `false` | Do not save the rest of the gallery |
-| `-H, --no-chapters` | `false` | Do not embed the track list as chapters |
-| `-T, --no-tags` | `false` | Do not write metadata |
+| `-I, --no-images` | `false` | Do not save the rest of the post's gallery |
+| `-H, --no-chapters` | `false` | Do not use the track list: no chapters, no split |
+| `-S, --no-split` | `false` | Do not cut a chaptered stream into one file per chapter |
+| `-T, --no-tags` | `false` | Do not write title, artist or album metadata |
 | `-v, --verbose` | `false` | Debug logging on stderr |
 
 ## Requirements

@@ -15,6 +15,7 @@ import (
 
 	"github.com/EagleStelle/jasmr-dl/internal/challenge"
 	"github.com/EagleStelle/jasmr-dl/internal/downloader"
+	"github.com/EagleStelle/jasmr-dl/internal/naming"
 	"github.com/EagleStelle/jasmr-dl/internal/scraper"
 	"github.com/EagleStelle/jasmr-dl/internal/util"
 )
@@ -50,6 +51,14 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	if retries < 0 {
 		return fmt.Errorf("--retries cannot be negative, got %d", retries)
 	}
+	// Settle a bad template before anything is fetched. Which default applies
+	// is not known until the post says what it holds.
+	var given *naming.Template
+	if cmd.Flags().Changed("output") {
+		if given, err = naming.Parse(outputTmpl); err != nil {
+			return err
+		}
+	}
 
 	// One Ctrl+C cancels every in-flight request cleanly.
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
@@ -81,14 +90,29 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		debugf(cmd, "%s: %s", t.Title, t.LinkURL)
 	}
 
-	dir := outputDirFor(album.Title)
+	chapters := chaptersFor(cmd, album)
+	split := splitting(chapters)
+	if split {
+		cmd.Printf("[info] cutting the stream into its %s\n", plural(len(chapters), "chapter"))
+	}
+
+	tmpl, err := templateFor(given, split)
+	if err != nil {
+		return err
+	}
+
+	fields := fieldsFor(album)
+	dir := underBasePath(tmpl.Dir(fields))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
 	cmd.Printf("[info] saving to %s\n", dir)
 
+	width := naming.Width(len(album.Tracks))
 	jobs := make([]downloader.Job, 0, len(album.Tracks))
-	for _, t := range album.Tracks {
+	for i, t := range album.Tracks {
+		f := fields
+		f.Number, f.Width = i+1, width
 		jobs = append(jobs, downloader.Job{
 			Name:       t.Title,
 			LinkURL:    t.LinkURL,
@@ -96,6 +120,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 			Alternates: t.Alternates,
 			Referer:    album.PageURL,
 			Tags:       tagsFor(album, t),
+			Fields:     f,
 		})
 	}
 
@@ -107,10 +132,12 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		Client:       sess.client,
 		UserAgent:    sess.userAgent,
 		OutputDir:    dir,
+		Template:     tmpl,
 		Connections:  connections,
 		Retries:      retries,
 		CoverPath:    coverPath,
-		Chapters:     chaptersFor(cmd, album),
+		Chapters:     chapters,
+		Split:        split,
 		OnCoverError: func(name string, err error) { cmd.PrintErrf("[warn] %s: %v\n", name, err) },
 		OnStart:      prog.Start,
 		OnProgress:   prog.Update,
@@ -303,7 +330,72 @@ func sameFile(a, b string) bool {
 	return os.SameFile(ai, bi)
 }
 
-// tagsFor builds the metadata written into one file.
+// underBasePath puts a relative template under --paths. A template that names
+// its own root already says where it goes.
+func underBasePath(dir string) string {
+	if basePath == "" || rooted(dir) {
+		return dir
+	}
+	return filepath.Join(basePath, dir)
+}
+
+// rooted reports whether dir says for itself where it starts. A leading
+// separator counts: Windows calls that drive-relative rather than absolute, but
+// it is still not somewhere --paths should move.
+func rooted(dir string) bool {
+	return filepath.IsAbs(dir) ||
+		filepath.VolumeName(dir) != "" ||
+		strings.HasPrefix(dir, "/") ||
+		strings.HasPrefix(dir, `\`)
+}
+
+// templateFor keeps the template the run was given, or picks the default the
+// post's own shape calls for.
+func templateFor(given *naming.Template, split bool) (*naming.Template, error) {
+	if given != nil {
+		return given, nil
+	}
+	if split {
+		return naming.Parse(defaultSplitTemplate)
+	}
+	return naming.Parse(defaultTemplate)
+}
+
+// fieldsFor is the album half of the output template, the half a directory may
+// name. An empty field is the template's own to stand in for.
+func fieldsFor(album *scraper.Album) naming.Fields {
+	year, month, day := splitDate(album.Date)
+	return naming.Fields{
+		Title:      album.Title,
+		RJCode:     album.RJCode,
+		Circle:     album.Circle,
+		Artist:     album.Artists,
+		Date:       album.Date,
+		Year:       year,
+		Month:      month,
+		Day:        day,
+		Track:      1,
+		TrackTotal: 1,
+	}
+}
+
+// splitDate breaks the scraper's ISO date apart; it yields that form or nothing.
+func splitDate(date string) (year, month, day string) {
+	parts := strings.Split(date, "-")
+	if len(parts) != 3 {
+		return "", "", ""
+	}
+	return parts[0], parts[1], parts[2]
+}
+
+// splitting reports whether the run cuts a stream on its chapters. chapters is
+// already empty where the post has none to use.
+func splitting(chapters []scraper.Chapter) bool {
+	return !noSplit && len(chapters) > 0
+}
+
+// tagsFor builds the metadata written into one file. A split overrides the
+// title and track number per chapter.
 func tagsFor(album *scraper.Album, track scraper.Track) downloader.Tags {
 	if noTags {
 		return downloader.Tags{}
@@ -316,6 +408,10 @@ func tagsFor(album *scraper.Album, track scraper.Track) downloader.Tags {
 		Date:        album.Date,
 		Genre:       genre,
 		Comment:     album.PageURL,
+		Track:       1,
+		TrackTotal:  1,
+		Disc:        1,
+		DiscTotal:   1,
 	}
 }
 
@@ -389,23 +485,26 @@ func reportSource(cmd *cobra.Command, album *scraper.Album) {
 	cmd.PrintErrln("[warn] audio is reassembled from it and ffmpeg is required")
 }
 
-// report lists the failures and returns an error only if every file failed.
+// report lists the failures and returns an error only if every download failed.
+// One download can leave several files behind, so the two are counted apart.
 func report(cmd *cobra.Command, results []downloader.Result) error {
-	var failed int
+	var failed, files int
 	for _, r := range results {
 		if r.Err != nil {
 			failed++
 			cmd.PrintErrf("[error] %s: %v\n", r.Job.Name, r.Err)
+			continue
 		}
+		files += len(r.Paths)
 	}
 
 	switch {
 	case failed == len(results):
 		return fmt.Errorf("all %s failed", plural(failed, "download"))
 	case failed > 0:
-		cmd.Printf("[done] %d of %s\n", len(results)-failed, plural(len(results), "file"))
+		cmd.Printf("[done] %s, %s failed\n", plural(files, "file"), plural(failed, "download"))
 	default:
-		cmd.Printf("[done] %s\n", plural(len(results), "file"))
+		cmd.Printf("[done] %s\n", plural(files, "file"))
 	}
 	return nil
 }
@@ -439,14 +538,6 @@ func parseAlbumURL(raw string) (*url.URL, error) {
 		return nil, fmt.Errorf("not a %s URL: %q", targetHost, raw)
 	}
 	return u, nil
-}
-
-// outputDirFor sanitizes the title, untrusted page content, into one component.
-func outputDirFor(title string) string {
-	if outputDir != "" {
-		return outputDir
-	}
-	return filepath.Join(".", util.Sanitize(title))
 }
 
 func orNone(s string) string {

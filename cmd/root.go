@@ -3,17 +3,45 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
-// version is the build revision, replaced at release time via -ldflags -X.
+// version is the build revision. A release build replaces it via -ldflags -X,
+// which the linker only honours on a variable holding a constant string, so it
+// has to start life as a plain literal.
 var version = "dev"
 
+// resolveVersion keeps whatever -ldflags wrote. Nothing writes it under
+// `go install <module>@<version>`, which runs no flags of ours, but the module
+// proxy records the version it served, so report that rather than "dev". A
+// build straight from the working tree has no such version and stays "dev".
+func resolveVersion() string {
+	if version != "dev" {
+		return version
+	}
+	bi, ok := debug.ReadBuildInfo()
+	if !ok || bi.Main.Version == "" || bi.Main.Version == "(devel)" {
+		return version
+	}
+	// goreleaser strips the tag's leading v; match it, whichever path built us.
+	return strings.TrimPrefix(bi.Main.Version, "v")
+}
+
+// The defaults put every post under its year and RJ code. What a post holds
+// decides the leaf: parts of a work carry its code, chapters cut out of one
+// stream carry their own titles.
+const (
+	defaultTemplate      = "{year}/{rjcode}/{rjcode}_{number}.{ext}"
+	defaultSplitTemplate = "{year}/{rjcode}/{number}_{chapter}.{ext}"
+)
+
 var (
-	outputDir   string
+	outputTmpl  string
+	basePath    string
 	concurrency int
 	connections int
 	retries     int
@@ -23,16 +51,18 @@ var (
 	noCover     bool
 	noImages    bool
 	noChapters  bool
+	noSplit     bool
 	noTags      bool
 	verbose     bool
 )
 
 var rootCmd = &cobra.Command{
 	Use:     "jasmr-dl <url>",
-	Version: version,
+	Version: resolveVersion(),
 	Example: "  jasmr-dl https://japaneseasmr.com/12345/\n" +
-		"  jasmr-dl https://japaneseasmr.com/12345/ -o ./out -N 8\n" +
-		"  jasmr-dl https://japaneseasmr.com/12345/ --no-cover\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"./out/{title}/{rjcode}_{number}.{ext}\" -N 8\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"{circle}/{rjcode}/{number}. {chapter}.{ext}\"\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ --no-split --no-cover\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -c C:\\path\\cookies.txt",
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -55,18 +85,20 @@ func Execute() {
 
 func init() {
 	f := rootCmd.PersistentFlags()
-	f.StringVarP(&outputDir, "output", "o", "", "path to the download directory")
-	f.IntVarP(&concurrency, "concurrency", "N", 3, "files to download at once")
-	f.IntVarP(&connections, "connections", "j", 32, "ranged requests in flight, which is what sets speed (max 128)")
+	f.StringVarP(&outputTmpl, "output", "o", defaultTemplate, "template naming each file and the directories above it")
+	f.StringVarP(&basePath, "paths", "P", "", "directory everything is written under")
+	f.IntVarP(&concurrency, "concurrency", "N", 3, "files downloaded at once")
+	f.IntVarP(&connections, "connections", "j", 32, "ranged requests in flight; this is what sets speed (max 128)")
 	f.IntVarP(&retries, "retries", "R", 4, "retry attempts per ranged request")
 	f.StringVarP(&cookieFile, "cookies", "c", "", "path to a cookies.txt export, saved for later runs")
 	f.StringVar(&browserPath, "use-browser", "", "path to a browser executable that clears a Cloudflare challenge")
-	f.BoolVar(&showBrowser, "show-browser", false, "show the browser clearing a Cloudflare challenge instead of running it headless")
+	f.BoolVar(&showBrowser, "show-browser", false, "show that browser instead of running it headless")
 	f.BoolVarP(&noCover, "no-cover", "C", false, "do not embed cover art")
 	f.BoolVarP(&noImages, "no-images", "I", false, "do not save the rest of the post's gallery")
-	f.BoolVarP(&noChapters, "no-chapters", "H", false, "do not embed the track list as chapters")
+	f.BoolVarP(&noChapters, "no-chapters", "H", false, "do not use the track list: no chapters, no split")
+	f.BoolVarP(&noSplit, "no-split", "S", false, "do not cut a chaptered stream into one file per chapter")
 	f.BoolVarP(&noTags, "no-tags", "T", false, "do not write title, artist or album metadata")
-	f.BoolVarP(&verbose, "verbose", "v", false, "debug logging")
+	f.BoolVarP(&verbose, "verbose", "v", false, "debug logging on stderr")
 
 	f.VisitAll(func(fl *pflag.Flag) { fl.Value = upperType{fl.Value} })
 }

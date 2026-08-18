@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/sync/semaphore"
 
+	"github.com/EagleStelle/jasmr-dl/internal/naming"
 	"github.com/EagleStelle/jasmr-dl/internal/scraper"
 	"github.com/EagleStelle/jasmr-dl/internal/util"
 )
@@ -32,6 +33,10 @@ type Job struct {
 	Referer string
 
 	Tags Tags
+
+	// Fields names the output. Name and Ext are filled in from the response
+	// where the server picks the filename.
+	Fields naming.Fields
 }
 
 // ProgressFunc reports transfer progress. total is -1 when unknown.
@@ -46,8 +51,15 @@ type Downloader struct {
 
 	CoverPath string
 
+	// Template names each finished file under OutputDir.
+	Template *naming.Template
+
 	// Chapters only mean anything when one file holds the whole work.
 	Chapters []scraper.Chapter
+
+	// Split cuts a chaptered stream into one file per chapter instead of
+	// embedding the chapters into a single file.
+	Split bool
 
 	// Connections caps the requests in flight across the run, which is what
 	// sets throughput. Zero means defaultConnections.
@@ -65,42 +77,51 @@ type Downloader struct {
 }
 
 // Download fetches one job, resuming a partial file if one is present. It
-// returns the final path on disk.
-func (d *Downloader) Download(ctx context.Context, job Job) (string, error) {
+// returns the final paths on disk, more than one where a stream was split.
+func (d *Downloader) Download(ctx context.Context, job Job) ([]string, error) {
 	var lastErr error
 
 	// One extra attempt beyond Retries so Retries=0 still tries once.
 	for attempt := 0; attempt <= d.Retries; attempt++ {
 		if attempt > 0 {
 			if err := sleepCtx(ctx, backoffDelay(attempt, lastErr)); err != nil {
-				return "", err
+				return nil, err
 			}
 		}
 
-		path, err := d.attempt(ctx, job)
+		paths, err := d.attempt(ctx, job)
 		if err == nil {
-			return path, nil
+			return paths, nil
 		}
 		if ctx.Err() != nil {
-			return "", ctx.Err()
+			return nil, ctx.Err()
 		}
 
 		var perm permanentError
 		if errors.As(err, &perm) {
-			return "", perm.err
+			return nil, perm.err
 		}
 		lastErr = err
 	}
-	return "", fmt.Errorf("after %d attempts: %w", d.Retries+1, lastErr)
+	return nil, fmt.Errorf("after %d attempts: %w", d.Retries+1, lastErr)
 }
 
 // attempt runs one resolve-and-transfer cycle.
-func (d *Downloader) attempt(ctx context.Context, job Job) (string, error) {
+func (d *Downloader) attempt(ctx context.Context, job Job) ([]string, error) {
 	// A playlist has no single file behind it.
 	if job.Source == scraper.SourceHLS {
 		return d.assembleHLS(ctx, job)
 	}
 
+	path, err := d.direct(ctx, job)
+	if err != nil {
+		return nil, err
+	}
+	return []string{path}, nil
+}
+
+// direct fetches a job the host serves as a file.
+func (d *Downloader) direct(ctx context.Context, job Job) (string, error) {
 	res, err := d.pickEncoding(ctx, job)
 	if err != nil {
 		return "", err
@@ -135,7 +156,13 @@ func (d *Downloader) attempt(ctx context.Context, job Job) (string, error) {
 		fallback = res.Name
 	}
 
-	name := filenameFrom(resp, fallback)
+	served := filenameFrom(resp, fallback)
+	if !util.IsAudioFile(served) {
+		resp.Body.Close()
+		return "", permanent(fmt.Errorf("refusing %q: not an allowlisted audio file", served))
+	}
+
+	name := d.leaf(job.Fields, served)
 	if !util.IsAudioFile(name) {
 		resp.Body.Close()
 		return "", permanent(fmt.Errorf("refusing %q: not an allowlisted audio file", name))
@@ -205,12 +232,21 @@ func (d *Downloader) store(ctx context.Context, job Job, resp *http.Response, na
 
 // embedded attaches art and chapters. Failure is non-fatal: the audio is fine.
 func (d *Downloader) embedded(ctx context.Context, job Job, path string) (string, error) {
-	if err := d.tag(ctx, job.Tags, path); err != nil {
+	if err := d.tag(ctx, job.Tags, d.embeddedChapters(), path); err != nil {
 		if d.OnCoverError != nil {
 			d.OnCoverError(filepath.Base(path), err)
 		}
 	}
 	return path, nil
+}
+
+// embeddedChapters is the list to write into a file. A split run cuts on them
+// instead, and each piece is one chapter.
+func (d *Downloader) embeddedChapters() []scraper.Chapter {
+	if d.Split {
+		return nil
+	}
+	return d.Chapters
 }
 
 // finished tests for a complete download. Tagging changes a file's length, so a
@@ -315,6 +351,13 @@ func (d *Downloader) writeBody(ctx context.Context, resp *http.Response, name, f
 }
 
 // --- filename -------------------------------------------------------------
+
+// leaf names one file. Only the extension comes from the host's own name; what
+// the file is called is the template's to say.
+func (d *Downloader) leaf(f naming.Fields, served string) string {
+	f.Ext = strings.TrimPrefix(extOf(served), ".")
+	return d.Template.File(f)
+}
 
 var (
 	// RFC 5987 form: filename*=UTF-8''<percent-encoded>

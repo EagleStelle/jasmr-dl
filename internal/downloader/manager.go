@@ -10,11 +10,12 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-// Result records the outcome of one job.
+// Result records the outcome of one job. Paths holds more than one file where
+// a stream was split into chapters.
 type Result struct {
-	Job  Job
-	Path string
-	Err  error
+	Job   Job
+	Paths []string
+	Err   error
 }
 
 // Run downloads concurrency files at once, each split into ranged pieces. Every
@@ -50,10 +51,10 @@ func (d *Downloader) Run(ctx context.Context, jobs []Job, concurrency int) []Res
 				return nil
 			}
 
-			path, err := d.Download(gctx, job)
+			paths, err := d.Download(gctx, job)
 
 			mu.Lock()
-			results[i] = Result{Job: job, Path: path, Err: err}
+			results[i] = Result{Job: job, Paths: paths, Err: err}
 			mu.Unlock()
 			return nil
 		})
