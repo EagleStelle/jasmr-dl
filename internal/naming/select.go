@@ -150,6 +150,56 @@ func WithNumber(raw string, prefix bool) string {
 	return raw[:start] + file + raw[end:]
 }
 
+// WithoutNumber drops the counter, and the separator beside it, from a filename
+// that has one file to name. A filename of nothing else keeps it.
+func WithoutNumber(raw string) string {
+	start, end := filenameBounds(raw)
+	file := raw[start:end]
+
+	at, width := numberBounds(file)
+	if at < 0 {
+		return raw
+	}
+
+	left, right := file[:at], file[at+width:]
+	kept := strings.TrimRight(left, glue)
+	switch dropped := left[len(kept):]; {
+	case dropped == "":
+		right = strings.TrimLeft(right, glue)
+	case strings.ContainsAny(dropped, "(["):
+		right = strings.TrimLeft(right, ")]")
+	}
+
+	file = kept + right
+	if strings.Trim(file[:extensionAt(file)], glue) == "" {
+		return raw
+	}
+	return raw[:start] + file + raw[end:]
+}
+
+// glue is the punctuation a counter is set off with.
+const glue = " _-.,#()[]"
+
+// numberBounds locates {number} in a filename, or -1 where it names none.
+func numberBounds(file string) (at, width int) {
+	for i := 0; ; {
+		open := strings.IndexByte(file[i:], '{')
+		if open < 0 {
+			return -1, 0
+		}
+		open += i
+		shut := strings.IndexByte(file[open:], '}')
+		if shut < 0 {
+			return -1, 0
+		}
+		shut += open
+		if strings.ToLower(strings.TrimSpace(file[open+1:shut])) == "number" {
+			return open, shut + 1 - open
+		}
+		i = shut + 1
+	}
+}
+
 // filenameBounds locates the segment naming the file. A trailing separator
 // names no segment, so the one before it is the file.
 func filenameBounds(raw string) (start, end int) {

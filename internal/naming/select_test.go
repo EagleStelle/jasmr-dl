@@ -156,7 +156,7 @@ func TestSelectedBranchParses(t *testing.T) {
 	}
 
 	f := album()
-	f.Number, f.Width, f.Chapter, f.Ext = 3, 2, "耳かき", "m4a"
+	f.Number, f.Total, f.Chapter, f.Ext = 3, 12, "耳かき", "m4a"
 	if got, want := tmpl.File(f), "03_耳かき.m4a"; got != want {
 		t.Errorf("File = %q, want %q", got, want)
 	}
@@ -229,7 +229,7 @@ func TestNumberedTemplateNamesEveryFileApart(t *testing.T) {
 			seen := map[string]bool{}
 			for i := 1; i <= 12; i++ {
 				f := album()
-				f.Number, f.Width, f.Ext = i, Width(12), "mp3"
+				f.Number, f.Total, f.Ext = i, 12, "mp3"
 				f.Chapter = "same title every time"
 
 				name := tmpl.File(f)

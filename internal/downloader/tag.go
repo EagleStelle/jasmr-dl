@@ -122,6 +122,7 @@ func (d *Downloader) tag(ctx context.Context, tags Tags, chapters []scraper.Chap
 		if err != nil {
 			return err
 		}
+		d.reportOverrun(chapters, total)
 		chapMeta = audio + ".ffmeta"
 		if err := writeChapterMeta(chapMeta, chapters, total); err != nil {
 			return err

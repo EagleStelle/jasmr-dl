@@ -98,7 +98,7 @@ func TestDefaultLayout(t *testing.T) {
 	}
 
 	f := album()
-	f.Number, f.Width, f.Ext = 2, 1, "mp3"
+	f.Number, f.Total, f.Ext = 2, 3, "mp3"
 
 	if got, want := tmpl.Dir(f), filepath.Join("2024", "RJ123456"); got != want {
 		t.Errorf("Dir = %q, want %q", got, want)
@@ -118,7 +118,7 @@ func TestDefaultSplitLayout(t *testing.T) {
 	}
 
 	f := album()
-	f.Number, f.Width, f.Chapter, f.Ext = 7, Width(12), "耳かき", "m4a"
+	f.Number, f.Total, f.Chapter, f.Ext = 7, 12, "耳かき", "m4a"
 
 	if got, want := tmpl.File(f), "07_耳かき.m4a"; got != want {
 		t.Errorf("File = %q, want %q", got, want)
@@ -241,7 +241,7 @@ func TestCounterRendering(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	set := Fields{Track: 3, TrackTotal: 12, Title: "a", Ext: "mp3"}
+	set := Fields{Number: 3, Total: 12, Title: "a", Ext: "mp3"}
 	if got, want := tmpl.File(set), "3of12_a.mp3"; got != want {
 		t.Errorf("File = %q, want %q", got, want)
 	}

@@ -34,7 +34,9 @@ const (
 
 	genre = "ASMR"
 
-	imagesLabel = "images"
+	// The rows a post opens beside its recordings, one of each.
+	imagesName   = "images"
+	chaptersName = "chapters"
 
 	// partSeparator joins a work to the part one file holds.
 	partSeparator = " - "
@@ -111,26 +113,26 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create output directory: %w", err)
 	}
 
-	width := naming.Width(len(album.Tracks))
 	jobs := make([]downloader.Job, 0, len(album.Tracks))
 	for i, t := range album.Tracks {
 		f := fields
-		f.Number, f.Width = i+1, width
+		f.Number, f.Total = i+1, len(album.Tracks)
 		jobs = append(jobs, downloader.Job{
 			Name:       t.Title,
 			LinkURL:    t.LinkURL,
 			Source:     t.Source,
 			Alternates: t.Alternates,
 			Referer:    album.PageURL,
-			Tags:       tagsFor(album, t),
+			Tags:       tagsFor(album, t, i+1),
 			Fields:     f,
 		})
 	}
 
 	prog := downloader.NewProgress(cmd.OutOrStdout())
+	lines := linesFor(album)
 
 	coverPath := fetchCover(ctx, cmd, sess, album, dir)
-	fetchImages(ctx, cmd, sess, album, dir, prog)
+	fetchImages(ctx, cmd, sess, album, dir, prog, lines)
 
 	d := &downloader.Downloader{
 		Client:       sess.client,
@@ -147,8 +149,18 @@ func runDownload(cmd *cobra.Command, args []string) error {
 			cmd.PrintErrf("[warn] chapter %s begins at %s, past the end of a %s stream; skipped\n",
 				name, start.Round(time.Second), total.Round(time.Second))
 		},
-		OnStart:    prog.Start,
-		OnProgress: prog.Update,
+		OnStart: func(name string, total int64) {
+			prog.Start(lines.line(downloader.KindRecording, name), total)
+		},
+		OnProgress: func(name string, done, total int64) {
+			prog.Update(lines.key(name), done, total)
+		},
+		OnSplitStart: func(total int) {
+			prog.StartCount(lines.line(downloader.KindChapter, chaptersName), int64(total))
+		},
+		OnSplitProgress: func(done, total int) {
+			prog.Update(lines.key(chaptersName), int64(done), int64(total))
+		},
 	}
 
 	debugf(cmd, "%d files at once, %d requests in flight, %d retries each", concurrency, connections, retries)
@@ -157,9 +169,6 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	// Drain the renderer first, or it fights the summary for the same lines.
 	prog.Wait()
 
-	if split {
-		cmd.Printf("[progress] cutting the stream into its %s\n", plural(len(chapters), "chapter"))
-	}
 	return report(cmd, dir, results)
 }
 
@@ -386,10 +395,13 @@ func templateFor(given string, split bool, files int) (*naming.Template, error) 
 	// carries one where the post holds more than one, and a template that
 	// places {number} itself is left to say where. Without this a custom -o
 	// naming no counter would write every file of a post to one name.
-	if split {
+	switch {
+	case split:
 		chosen = naming.WithNumber(chosen, true)
-	} else if files > 1 {
+	case files > 1:
 		chosen = naming.WithNumber(chosen, false)
+	default:
+		chosen = naming.WithoutNumber(chosen)
 	}
 	return naming.Parse(chosen)
 }
@@ -399,16 +411,14 @@ func templateFor(given string, split bool, files int) (*naming.Template, error) 
 func fieldsFor(album *scraper.Album) naming.Fields {
 	year, month, day := splitDate(album.Date)
 	return naming.Fields{
-		Title:      album.Title,
-		RJCode:     album.RJCode,
-		Circle:     album.Circle,
-		Artist:     album.Artists,
-		Date:       album.Date,
-		Year:       year,
-		Month:      month,
-		Day:        day,
-		Track:      1,
-		TrackTotal: 1,
+		Title:  album.Title,
+		RJCode: album.RJCode,
+		Circle: album.Circle,
+		Artist: album.Artists,
+		Date:   album.Date,
+		Year:   year,
+		Month:  month,
+		Day:    day,
 	}
 }
 
@@ -427,9 +437,9 @@ func splitting(chapters []scraper.Chapter) bool {
 	return !noSplit && len(chapters) > 0
 }
 
-// tagsFor builds the metadata written into one file. A split overrides the
-// title and track number per chapter.
-func tagsFor(album *scraper.Album, track scraper.Track) downloader.Tags {
+// tagsFor builds the metadata written into one file, n being its place in the
+// post. A split overrides the title and track number per chapter.
+func tagsFor(album *scraper.Album, track scraper.Track, n int) downloader.Tags {
 	if noTags {
 		return downloader.Tags{}
 	}
@@ -441,8 +451,8 @@ func tagsFor(album *scraper.Album, track scraper.Track) downloader.Tags {
 		Date:        album.Date,
 		Genre:       genre,
 		Comment:     album.PageURL,
-		Track:       1,
-		TrackTotal:  1,
+		Track:       n,
+		TrackTotal:  len(album.Tracks),
 		Disc:        1,
 		DiscTotal:   1,
 	}
@@ -482,9 +492,39 @@ func fetchCover(ctx context.Context, cmd *cobra.Command, s session, album *scrap
 	return path
 }
 
+// postLines names one post's progress rows, all of them titled alike and told
+// apart by a key the post's address scopes.
+type postLines struct {
+	scope string
+	label string
+}
+
+func linesFor(album *scraper.Album) postLines {
+	return postLines{scope: album.PageURL, label: progressLabel(album)}
+}
+
+func (p postLines) key(name string) string {
+	return p.scope + "\x00" + name
+}
+
+func (p postLines) line(kind, name string) downloader.Line {
+	return downloader.Line{Key: p.key(name), Kind: kind, Label: p.label}
+}
+
+// progressLabel titles a post's rows, falling back where it has no title.
+func progressLabel(album *scraper.Album) string {
+	switch {
+	case album.Title != "":
+		return album.Title
+	case album.RJCode != "":
+		return album.RJCode
+	}
+	return album.PageURL
+}
+
 // fetchImages saves the rest of the post's gallery beside the jacket. Best
 // effort, like the cover: pictures are not what the run is for.
-func fetchImages(ctx context.Context, cmd *cobra.Command, s session, album *scraper.Album, dir string, prog *downloader.Progress) {
+func fetchImages(ctx context.Context, cmd *cobra.Command, s session, album *scraper.Album, dir string, prog *downloader.Progress, lines postLines) {
 	if noImages {
 		return
 	}
@@ -502,9 +542,9 @@ func fetchImages(ctx context.Context, cmd *cobra.Command, s session, album *scra
 		return
 	}
 
-	prog.StartCount(imagesLabel, int64(len(urls)))
+	prog.StartCount(lines.line(downloader.KindImage, imagesName), int64(len(urls)))
 	paths := downloader.FetchImages(ctx, s.client, s.userAgent, urls, album.PageURL, dir,
-		func(done, total int) { prog.Update(imagesLabel, int64(done), int64(total)) },
+		func(done, total int) { prog.Update(lines.key(imagesName), int64(done), int64(total)) },
 		func(err error) { cmd.PrintErrf("[warn] image not saved: %v\n", err) })
 	debugf(cmd, "gallery: %d saved", len(paths))
 }

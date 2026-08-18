@@ -31,12 +31,9 @@ type Fields struct {
 	Chapter string
 	Ext     string
 
-	// Number is the file's place in the post, padded to Width.
+	// Number is the file's place in the post, of Total files.
 	Number int
-	Width  int
-
-	Track      int
-	TrackTotal int
+	Total  int
 }
 
 var albumField = map[string]func(Fields) string{
@@ -53,9 +50,9 @@ var albumField = map[string]func(Fields) string{
 var fileField = map[string]func(Fields) string{
 	"chapter":    func(f Fields) string { return f.Chapter },
 	"ext":        func(f Fields) string { return f.Ext },
-	"number":     func(f Fields) string { return number(f.Number, f.Width) },
-	"track":      func(f Fields) string { return number(f.Track, 0) },
-	"tracktotal": func(f Fields) string { return number(f.TrackTotal, 0) },
+	"number":     func(f Fields) string { return number(f.Number, Width(f.Total)) },
+	"track":      func(f Fields) string { return number(f.Number, 0) },
+	"tracktotal": func(f Fields) string { return number(f.Total, 0) },
 }
 
 // Template is a parsed output template: directory segments and a filename.
