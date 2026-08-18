@@ -13,10 +13,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"jasmr-dl/internal/challenge"
-	"jasmr-dl/internal/downloader"
-	"jasmr-dl/internal/scraper"
-	"jasmr-dl/internal/util"
+	"github.com/EagleStelle/jasmr-dl/internal/challenge"
+	"github.com/EagleStelle/jasmr-dl/internal/downloader"
+	"github.com/EagleStelle/jasmr-dl/internal/scraper"
+	"github.com/EagleStelle/jasmr-dl/internal/util"
 )
 
 const (

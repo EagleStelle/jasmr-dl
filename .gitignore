@@ -6,6 +6,9 @@ jasmr-dl.exe
 *.so
 *.dylib
 
+# Release output
+dist/
+
 # Test and coverage
 *.test
 *.out

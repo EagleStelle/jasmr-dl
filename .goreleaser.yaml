@@ -1,0 +1,51 @@
+version: 2
+
+project_name: jasmr-dl
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: jasmr-dl
+    main: .
+    binary: jasmr-dl
+    env:
+      - CGO_ENABLED=0
+    # Same flags the Makefile uses, so a release artifact matches a local
+    # `make build`: -s -w drop the symbol table and DWARF, -trimpath makes the
+    # build reproducible and strips absolute paths.
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/EagleStelle/jasmr-dl/cmd.version={{ .Version }}
+    goos:
+      - windows
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    ids:
+      - jasmr-dl
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
