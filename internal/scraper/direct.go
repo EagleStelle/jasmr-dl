@@ -7,7 +7,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 
-	"jasmr-dl/internal/util"
+	"github.com/EagleStelle/jasmr-dl/internal/util"
 )
 
 const playlistExt = ".m3u8"

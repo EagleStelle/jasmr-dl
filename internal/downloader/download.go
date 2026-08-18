@@ -16,8 +16,8 @@ import (
 
 	"golang.org/x/sync/semaphore"
 
-	"jasmr-dl/internal/scraper"
-	"jasmr-dl/internal/util"
+	"github.com/EagleStelle/jasmr-dl/internal/scraper"
+	"github.com/EagleStelle/jasmr-dl/internal/util"
 )
 
 // Job is one file to fetch. Name is used only if the server declines to name it.

@@ -1,4 +1,4 @@
-module jasmr-dl
+module github.com/EagleStelle/jasmr-dl
 
 go 1.26.1
 

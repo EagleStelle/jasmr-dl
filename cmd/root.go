@@ -9,6 +9,9 @@ import (
 	"github.com/spf13/pflag"
 )
 
+// version is the build revision, replaced at release time via -ldflags -X.
+var version = "dev"
+
 var (
 	outputDir   string
 	concurrency int
@@ -25,7 +28,8 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use: "jasmr-dl <url>",
+	Use:     "jasmr-dl <url>",
+	Version: version,
 	Example: "  jasmr-dl https://japaneseasmr.com/12345/\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -o ./out -N 8\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ --no-cover\n" +

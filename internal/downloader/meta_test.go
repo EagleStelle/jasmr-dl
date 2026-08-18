@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"jasmr-dl/internal/scraper"
+	"github.com/EagleStelle/jasmr-dl/internal/scraper"
 )
 
 func TestWriteChapterMeta(t *testing.T) {

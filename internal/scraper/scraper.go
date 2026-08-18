@@ -10,7 +10,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 
-	"jasmr-dl/internal/util"
+	"github.com/EagleStelle/jasmr-dl/internal/util"
 )
 
 // Scraper reads album metadata. Safe to reuse across albums.

@@ -6,7 +6,7 @@ import (
 	"io"
 	"net/http"
 
-	"jasmr-dl/internal/util"
+	"github.com/EagleStelle/jasmr-dl/internal/util"
 )
 
 // Resolved is a URL that serves bytes, plus what must accompany it.

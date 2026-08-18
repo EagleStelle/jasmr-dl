@@ -1,6 +1,6 @@
 package main
 
-import "jasmr-dl/cmd"
+import "github.com/EagleStelle/jasmr-dl/cmd"
 
 func main() {
 	cmd.Execute()

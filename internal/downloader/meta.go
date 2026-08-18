@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"jasmr-dl/internal/scraper"
+	"github.com/EagleStelle/jasmr-dl/internal/scraper"
 )
 
 const chapterTimebase = "1/1000"
