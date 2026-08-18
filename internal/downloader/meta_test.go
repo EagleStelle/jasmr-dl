@@ -32,8 +32,10 @@ func TestWriteChapterMeta(t *testing.T) {
 		"START=0\nEND=323000",
 		"START=323000\nEND=1260000",
 		"START=1260000\nEND=2000000",
-		`semi\;colon\=equals\#hash`,
-		"トラック1：リアス部長の花嫁修行！？_wav",
+		// Numbered, the same form a split gives each file.
+		"title=1_トラック1：リアス部長の花嫁修行！？_wav",
+		`title=2_semi\;colon\=equals\#hash`,
+		"title=3_last",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %q in:\n%s", want, s)
@@ -41,6 +43,25 @@ func TestWriteChapterMeta(t *testing.T) {
 	}
 	if n := strings.Count(s, "[CHAPTER]"); n != 3 {
 		t.Errorf("got %d chapters, want 3", n)
+	}
+}
+
+// Past nine chapters the numbers pad, so a listing sorts in order.
+func TestWriteChapterMetaPadsPastNine(t *testing.T) {
+	path := t.TempDir() + "/m.ffmeta"
+	chapters := make([]scraper.Chapter, 12)
+	for i := range chapters {
+		chapters[i] = scraper.Chapter{Start: time.Duration(i) * time.Minute, Title: "c"}
+	}
+	if err := writeChapterMeta(path, chapters, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(path)
+
+	for _, want := range []string{"title=01_c", "title=09_c", "title=12_c"} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("missing %q", want)
+		}
 	}
 }
 

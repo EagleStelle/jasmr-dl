@@ -43,7 +43,7 @@ func FetchCover(ctx context.Context, client *http.Client, userAgent, coverURL, r
 // FetchImages saves urls into an images subfolder of dir, numbered in page
 // order, and returns the paths written. A picture that will not come down goes
 // to onError and is skipped, since the gallery is not what the run is for.
-func FetchImages(ctx context.Context, client *http.Client, userAgent string, urls []string, referer, dir string, onError func(err error)) []string {
+func FetchImages(ctx context.Context, client *http.Client, userAgent string, urls []string, referer, dir string, onProgress func(done, total int), onError func(err error)) []string {
 	dir = filepath.Join(dir, imagesDirName)
 
 	var paths []string
@@ -62,6 +62,9 @@ func FetchImages(ctx context.Context, client *http.Client, userAgent string, url
 			continue
 		}
 		paths = append(paths, path)
+		if onProgress != nil {
+			onProgress(len(paths), len(urls))
+		}
 	}
 	return paths
 }

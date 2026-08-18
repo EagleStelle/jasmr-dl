@@ -36,44 +36,70 @@ const (
 )
 
 // assembleHLS rebuilds a work from its segments, kept until the remux succeeds.
-func (d *Downloader) assembleHLS(ctx context.Context, job Job) (string, error) {
+func (d *Downloader) assembleHLS(ctx context.Context, job Job) ([]string, error) {
 	// Before fetching anything: failing after 160 MB is no use.
 	tools, err := findFFmpeg()
 	if err != nil {
-		return "", permanent(err)
+		return nil, permanent(err)
+	}
+	if d.Split {
+		return d.splitStream(ctx, job, tools)
 	}
 
-	name := util.Sanitize(strings.TrimSuffix(job.Name, hlsOutputExt) + hlsOutputExt)
+	f := job.Fields
+	f.Ext = strings.TrimPrefix(hlsOutputExt, ".")
+	name := streamName(d.Template.File(f))
 	if !util.IsAudioFile(name) {
-		return "", permanent(fmt.Errorf("refusing %q: not an allowlisted audio file", name))
+		return nil, permanent(fmt.Errorf("refusing %q: not an allowlisted audio file", name))
 	}
 	final := filepath.Join(d.OutputDir, name)
 	if _, statErr := os.Stat(final); statErr == nil {
-		return final, nil
+		return []string{final}, nil
 	}
 
+	if err := d.buildStream(ctx, job, tools, final, name); err != nil {
+		return nil, err
+	}
+
+	// Tag from the finished file: chapter ends need its real length, and the
+	// nominal EXTINF sum overshoots it.
+	path, err := d.embedded(ctx, job, final)
+	if err != nil {
+		return nil, err
+	}
+	return []string{path}, nil
+}
+
+// buildStream fetches every segment and remuxes them into final.
+func (d *Downloader) buildStream(ctx context.Context, job Job, tools ffmpegPair, final, label string) error {
 	segments, err := d.fetchPlaylist(ctx, job.LinkURL, job.Referer)
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	segDir := final + ".segments"
 	if err := os.MkdirAll(segDir, 0o755); err != nil {
-		return "", permanent(err)
+		return permanent(err)
 	}
 
-	paths, err := d.fetchSegments(ctx, job, segments, segDir, name)
+	paths, err := d.fetchSegments(ctx, job, segments, segDir, label)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if err := d.remux(ctx, tools.ffmpeg, segDir, paths, final); err != nil {
-		return "", err
+		return err
 	}
 	os.RemoveAll(segDir)
+	return nil
+}
 
-	// Tag from the finished file: chapter ends need its real length, and the
-	// nominal EXTINF sum overshoots it.
-	return d.embedded(ctx, job, final)
+// streamName forces the extension the remux actually writes, whatever the
+// template asked for.
+func streamName(name string) string {
+	if util.IsAudioFile(name) {
+		name = strings.TrimSuffix(name, extOf(name))
+	}
+	return name + hlsOutputExt
 }
 
 // fetchPlaylist follows one variant level if given a master playlist.

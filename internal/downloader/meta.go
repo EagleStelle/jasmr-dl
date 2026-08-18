@@ -6,10 +6,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/EagleStelle/jasmr-dl/internal/naming"
 	"github.com/EagleStelle/jasmr-dl/internal/scraper"
 )
 
 const chapterTimebase = "1/1000"
+
+// chapterName numbers a chapter within its work. A split writes it as the
+// filename, a whole file as the embedded chapter title; nothing else carries
+// the order in either place.
+func chapterName(i, total int, title string) string {
+	return fmt.Sprintf("%0*d_%s", naming.Width(total), i+1, title)
+}
 
 // writeChapterMeta writes ffmetadata. ffmpeg requires an END on every chapter.
 func writeChapterMeta(path string, chapters []scraper.Chapter, total time.Duration) error {
@@ -25,7 +33,8 @@ func writeChapterMeta(path string, chapters []scraper.Chapter, total time.Durati
 			continue
 		}
 		fmt.Fprintf(&b, "\n[CHAPTER]\nTIMEBASE=%s\nSTART=%d\nEND=%d\ntitle=%s\n",
-			chapterTimebase, c.Start.Milliseconds(), end.Milliseconds(), escapeMeta(c.Title))
+			chapterTimebase, c.Start.Milliseconds(), end.Milliseconds(),
+			escapeMeta(chapterName(i, len(chapters), c.Title)))
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
