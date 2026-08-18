@@ -17,7 +17,9 @@ type Result struct {
 	Err  error
 }
 
-// Run downloads concurrency files at once, each split across ranged chunks.
+// Run downloads concurrency files at once, each split into ranged pieces. Every
+// file's pieces draw on one budget, so the requests in flight hold to the
+// ceiling however the files are arranged behind it.
 //
 // A failed job does not cancel its siblings, so one dead link cannot abandon a
 // good album. Cancellation still propagates.
@@ -25,8 +27,10 @@ func (d *Downloader) Run(ctx context.Context, jobs []Job, concurrency int) []Res
 	if len(jobs) > 0 && concurrency > len(jobs) {
 		concurrency = len(jobs)
 	}
-	concurrency, d.chunks = connectionPlan(concurrency)
-	d.budget = semaphore.NewWeighted(maxConnections)
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	d.budget = semaphore.NewWeighted(int64(d.connections()))
 
 	results := make([]Result, len(jobs))
 

@@ -2,143 +2,173 @@ package downloader
 
 import (
 	"context"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 
 	"golang.org/x/sync/errgroup"
 )
 
-// The media host throttles per connection, so files are split across requests.
+// The host throttles per request, not per connection, so speed follows the
+// number in flight. Measured: 8 gave 0.6 MB/s, 32 gave 2.2, 128 gave 5.4, with
+// no rate limiting. HTTP/1.1 and HTTP/2 measured the same.
 const (
-	minChunk  = 4 << 20
-	maxChunks = 4
+	defaultConnections = 32
+	maxConnections     = 128
 
-	// Throughput plateaus here: 8 conns ~640 KB/s, 16 ~620.
-	maxConnections = 8
+	// The host resets streams that live for minutes, so pieces stay small
+	// enough to finish in about half of one.
+	pieceSize = 2 << 20
+
+	// Below this, splitting costs more requests than it saves time.
+	minChunk = 4 << 20
 )
 
-// connectionPlan divides the ceiling among files in flight. More files than
-// connections would only leave the extras waiting at zero, so files clamp too.
-func connectionPlan(files int) (concurrency, chunks int) {
-	if files < 1 {
-		files = 1
+// connections caps the requests in flight across the run.
+func (d *Downloader) connections() int {
+	if d.Connections < 1 {
+		return defaultConnections
 	}
-	if files > maxConnections {
-		files = maxConnections
+	if d.Connections > maxConnections {
+		return maxConnections
 	}
-
-	chunks = maxConnections / files
-	if chunks > maxChunks {
-		chunks = maxChunks
-	}
-	return files, chunks
+	return d.Connections
 }
 
-type chunkPlan struct {
-	total  int64
-	ranges [][2]int64
+func pieceCount(total int64) int {
+	return int((total + pieceSize - 1) / pieceSize)
 }
 
-// planChunks splits total into ranges, or false if one stream is better.
-func planChunks(total int64, budget int) (chunkPlan, bool) {
-	if total < minChunk*2 || budget < 2 {
-		return chunkPlan{}, false
+// pieceRange is the range piece i covers; the last one is short.
+func pieceRange(i int, total int64) (start, end int64) {
+	start = int64(i) * pieceSize
+	end = start + pieceSize - 1
+	if end > total-1 {
+		end = total - 1
 	}
-
-	n := min(int(total/minChunk), budget, maxChunks)
-	if n < 2 {
-		return chunkPlan{}, false
-	}
-
-	size := total / int64(n)
-	plan := chunkPlan{total: total}
-	for i := 0; i < n; i++ {
-		start := int64(i) * size
-		end := start + size - 1
-		if i == n-1 {
-			end = total - 1
-		}
-		plan.ranges = append(plan.ranges, [2]int64{start, end})
-	}
-	return plan, true
+	return start, end
 }
 
-// chunked joins parallel ranged requests. Each chunk's part file length is its
-// own resume point.
-func (d *Downloader) chunked(ctx context.Context, res *Resolved, plan chunkPlan, name, final, part string) (string, error) {
+func worthChunking(total int64) bool {
+	return total >= minChunk
+}
+
+// chunked fills part from a queue of pieces, each worker writing at its own
+// offset. A queue rather than one range per worker, so none idles at the end
+// while the slowest range finishes.
+func (d *Downloader) chunked(ctx context.Context, res *Resolved, total int64, name, final, part string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(final), 0o755); err != nil {
 		return "", permanent(err)
 	}
 
-	paths := make([]string, len(plan.ranges))
-	for i := range plan.ranges {
-		paths[i] = fmt.Sprintf("%s.%d", part, i)
+	f, err := os.OpenFile(part, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return "", permanent(err)
 	}
+	defer f.Close()
+	if err := f.Truncate(total); err != nil {
+		return "", permanent(err)
+	}
+
+	n := pieceCount(total)
+	state, err := openPieceState(part+stateSuffix, total)
+	if err != nil {
+		return "", permanent(err)
+	}
+	defer state.Close()
 
 	var done atomic.Int64
-	for i, r := range plan.ranges {
-		if have := fileSize(paths[i]); have > 0 {
-			if have > r[1]-r[0]+1 {
-				os.Remove(paths[i]) // longer than its range: not ours
-				continue
-			}
-			done.Add(have)
-		}
-	}
+	done.Store(state.bytesHeld(total))
 
 	if d.OnStart != nil {
-		d.OnStart(name, plan.total)
+		d.OnStart(name, total)
 	}
 	if d.OnProgress != nil {
-		d.OnProgress(name, done.Load(), plan.total)
+		d.OnProgress(name, done.Load(), total)
 	}
 
+	var next atomic.Int64
 	g, gctx := errgroup.WithContext(ctx)
-	for i, r := range plan.ranges {
+	for range min(d.connections(), n) {
 		g.Go(func() error {
-			if err := d.chunk(gctx, res, paths[i], r, name, plan.total, &done); err != nil {
-				return fmt.Errorf("bytes %d-%d: %w", r[0], r[1], err)
+			for {
+				i := int(next.Add(1) - 1)
+				if i >= n {
+					return nil
+				}
+				if state.has(i) {
+					continue
+				}
+				if err := d.piece(gctx, res, f, state, i, total, name, &done); err != nil {
+					start, end := pieceRange(i, total)
+					return fmt.Errorf("bytes %d-%d: %w", start, end, err)
+				}
 			}
-			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {
 		return "", err
 	}
 
-	if err := joinChunks(paths, part, plan.total); err != nil {
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	if err := state.Close(); err != nil {
 		return "", err
 	}
 	if err := os.Rename(part, final); err != nil {
 		return "", err
 	}
-	for _, p := range paths {
-		os.Remove(p)
-	}
+	os.Remove(part + stateSuffix)
 	return final, nil
 }
 
-func (d *Downloader) chunk(ctx context.Context, res *Resolved, path string, r [2]int64, name string, total int64, done *atomic.Int64) error {
-	have := fileSize(path)
-	want := r[1] - r[0] + 1
-	if have == want {
-		return nil
-	}
+// piece retries on its own, so a reset stream costs one piece, not the file.
+func (d *Downloader) piece(ctx context.Context, res *Resolved, f *os.File, state *pieceState, i int, total int64, name string, done *atomic.Int64) error {
+	var lastErr error
+	for attempt := 0; attempt <= d.Retries; attempt++ {
+		if attempt > 0 {
+			if err := sleepCtx(ctx, backoffDelay(attempt, lastErr)); err != nil {
+				return err
+			}
+		}
 
+		err := d.fetchPiece(ctx, res, f, i, total, name, done)
+		if err == nil {
+			return state.set(i)
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		var perm permanentError
+		if errors.As(err, &perm) {
+			return err
+		}
+		lastErr = err
+	}
+	return fmt.Errorf("after %d attempts: %w", d.Retries+1, lastErr)
+}
+
+// fetchPiece runs one ranged request and writes it at its offset.
+func (d *Downloader) fetchPiece(ctx context.Context, res *Resolved, f *os.File, i int, total int64, name string, done *atomic.Int64) error {
 	if err := d.acquire(ctx); err != nil {
 		return err
 	}
 	defer d.release()
 
+	start, end := pieceRange(i, total)
 	req, err := d.mediaRequest(ctx, res.URL, res.Referer)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", r[0]+have, r[1]))
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
 
 	resp, err := d.Client.Do(req)
 	if err != nil {
@@ -154,60 +184,130 @@ func (d *Downloader) chunk(ctx context.Context, res *Resolved, path string, r [2
 		return transferStatus(resp)
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return permanent(err)
-	}
-
-	w := d.tee(f, func(n int) {
+	want := end - start + 1
+	var counted int64
+	w := d.tee(&offsetWriter{f: f, off: start}, func(n int) {
+		counted += int64(n)
 		d.OnProgress(name, done.Add(int64(n)), total)
 	})
 
-	_, copyErr := io.Copy(w, io.LimitReader(resp.Body, want-have))
-	closeErr := f.Close()
-	switch {
-	case copyErr != nil:
-		return copyErr
-	case closeErr != nil:
-		return closeErr
+	written, err := io.Copy(w, io.LimitReader(resp.Body, want))
+	if err == nil && written != want {
+		err = fmt.Errorf("short piece: got %d of %d bytes", written, want)
 	}
-
-	if got := fileSize(path); got != want {
-		return fmt.Errorf("short chunk: got %d of %d bytes", got, want)
+	if err != nil {
+		// Refetched from its start, so these bytes are not held.
+		if counted > 0 && d.OnProgress != nil {
+			d.OnProgress(name, done.Add(-counted), total)
+		}
+		return err
 	}
 	return nil
 }
 
-func joinChunks(paths []string, part string, total int64) error {
-	out, err := os.OpenFile(part, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+// offsetWriter writes at a position, so workers share one file without seeking
+// against each other.
+type offsetWriter struct {
+	f   *os.File
+	off int64
+}
+
+func (w *offsetWriter) Write(p []byte) (int, error) {
+	n, err := w.f.WriteAt(p, w.off)
+	w.off += int64(n)
+	return n, err
+}
+
+// --- resume ---------------------------------------------------------------
+
+const (
+	stateSuffix = ".pieces"
+	// stateMagic is bumped when the layout changes, retiring stale files.
+	stateMagic  = "jasmr\x01"
+	stateHeader = len(stateMagic) + 8 // magic, then the total it was written for
+)
+
+// pieceState is the bitmap a resume reads. Pieces finish out of order, so a
+// part file's length cannot stand in for it. A piece is marked only once its
+// bytes are written, so a crash can lose one but never invent one.
+type pieceState struct {
+	f  *os.File
+	mu sync.Mutex
+	// bits is guarded by mu: eight pieces share a byte.
+	bits []byte
+}
+
+// openPieceState starts fresh when the file on disk describes another download.
+func openPieceState(path string, total int64) (*pieceState, error) {
+	n := pieceCount(total)
+	size := stateHeader + (n+7)/8
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		return permanent(err)
+		return nil, err
 	}
 
-	var written int64
-	for _, p := range paths {
-		in, err := os.Open(p)
-		if err != nil {
-			out.Close()
-			return err
-		}
-		n, err := io.Copy(out, in)
-		in.Close()
-		if err != nil {
-			out.Close()
-			return err
-		}
-		written += n
-	}
-	if err := out.Close(); err != nil {
-		return err
+	buf := make([]byte, size)
+	read, err := f.ReadAt(buf, 0)
+	if err != nil && !errors.Is(err, io.EOF) {
+		f.Close()
+		return nil, err
 	}
 
-	if written != total {
-		os.Remove(part)
-		return fmt.Errorf("joined %d bytes, want %d", written, total)
+	fresh := read < size ||
+		string(buf[:len(stateMagic)]) != stateMagic ||
+		int64(binary.BigEndian.Uint64(buf[len(stateMagic):stateHeader])) != total
+	if fresh {
+		clear(buf)
+		copy(buf, stateMagic)
+		binary.BigEndian.PutUint64(buf[len(stateMagic):stateHeader], uint64(total))
+		if err := f.Truncate(0); err != nil {
+			f.Close()
+			return nil, err
+		}
+		if _, err := f.WriteAt(buf, 0); err != nil {
+			f.Close()
+			return nil, err
+		}
 	}
-	return nil
+
+	return &pieceState{f: f, bits: buf[stateHeader:]}, nil
+}
+
+func (s *pieceState) has(i int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bits[i/8]&(1<<(i%8)) != 0
+}
+
+// set marks piece i held, in memory and on disk.
+func (s *pieceState) set(i int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.bits[i/8] |= 1 << (i % 8)
+	_, err := s.f.WriteAt(s.bits[i/8:i/8+1], int64(stateHeader+i/8))
+	return err
+}
+
+// bytesHeld is what the marked pieces account for.
+func (s *pieceState) bytesHeld(total int64) int64 {
+	var held int64
+	for i := range pieceCount(total) {
+		if s.has(i) {
+			start, end := pieceRange(i, total)
+			held += end - start + 1
+		}
+	}
+	return held
+}
+
+func (s *pieceState) Close() error {
+	err := s.f.Close()
+	if errors.Is(err, os.ErrClosed) {
+		return nil
+	}
+	return err
 }
 
 func fileSize(path string) int64 {

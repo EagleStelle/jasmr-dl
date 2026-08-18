@@ -22,8 +22,9 @@ import (
 // A 6-hour work runs to roughly 2300 segments.
 const maxSegments = 20000
 
-// Bounds goroutines only; the connection budget bounds requests.
-const maxSegmentWorkers = 64
+// Bounds goroutines only; the connection budget bounds requests. Above the
+// budget, so a released slot always has a goroutine waiting for it.
+const maxSegmentWorkers = maxConnections * 2
 
 // tsSync is the sync byte every MPEG-TS packet starts with.
 const tsSync = 0x47

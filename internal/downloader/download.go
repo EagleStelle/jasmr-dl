@@ -49,8 +49,10 @@ type Downloader struct {
 	// Chapters only mean anything when one file holds the whole work.
 	Chapters []scraper.Chapter
 
-	// Ranged chunks per file. Run derives it from the files in flight.
-	chunks int
+	// Connections caps the requests in flight across the run, which is what
+	// sets throughput. Zero means defaultConnections.
+	Connections int
+
 	budget *semaphore.Weighted
 
 	// OnStart opens a line; total is 0 when the size is not known yet, which
@@ -147,26 +149,27 @@ func (d *Downloader) attempt(ctx context.Context, job Job) (string, error) {
 		return final, nil
 	}
 
-	// This host throttles per connection, so one socket wastes bandwidth.
-	if resp.Header.Get("Accept-Ranges") == "bytes" {
-		if plan, ok := planChunks(resp.ContentLength, d.chunks); ok {
-			resp.Body.Close()
-			release() // the chunks take their own slots
-			path, err := d.chunked(ctx, res, plan, name, final, part)
-			if errors.Is(err, errRangeIgnored) {
-				if err := d.acquire(ctx); err != nil {
-					return "", err
-				}
-				held = true
-				// The host advertises ranges without honoring them: one
-				// stream from the start is all it will serve.
-				return d.transfer(ctx, job, res, 0, name, final, part)
-			}
-			if err != nil {
+	// This host throttles per request, so one stream wastes bandwidth.
+	if resp.Header.Get("Accept-Ranges") == "bytes" && worthChunking(resp.ContentLength) {
+		total := resp.ContentLength
+		resp.Body.Close()
+		release() // the pieces take their own slots
+
+		path, err := d.chunked(ctx, res, total, name, final, part)
+		if errors.Is(err, errRangeIgnored) {
+			if err := d.acquire(ctx); err != nil {
 				return "", err
 			}
-			return d.embedded(ctx, job, path)
+			held = true
+			// The host advertises ranges without honoring them: one stream
+			// from the start is all it will serve.
+			os.Remove(part + stateSuffix)
+			return d.transfer(ctx, job, res, 0, name, final, part)
 		}
+		if err != nil {
+			return "", err
+		}
+		return d.embedded(ctx, job, path)
 	}
 
 	// Restart the request as a ranged one if a partial file exists. The first

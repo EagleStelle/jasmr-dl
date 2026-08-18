@@ -1,53 +1,133 @@
 package downloader
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
-func TestConnectionPlanHoldsTheCeiling(t *testing.T) {
-	for _, tc := range []struct{ ask, files, chunks int }{
-		{0, 1, maxChunks},
-		{1, 1, maxChunks},
-		{2, 2, maxChunks},
-		{3, 3, 2},
-		{4, 4, 2},
-		{8, 8, 1},
-		{20, 8, 1}, // clamped: extra files would only wait at zero
+func TestConnectionsClampToTheCeiling(t *testing.T) {
+	for _, tc := range []struct{ set, want int }{
+		{0, defaultConnections},
+		{-5, defaultConnections},
+		{1, 1},
+		{32, 32},
+		{maxConnections, maxConnections},
+		{maxConnections + 1, maxConnections},
 	} {
-		files, chunks := connectionPlan(tc.ask)
-		if files != tc.files || chunks != tc.chunks {
-			t.Errorf("connectionPlan(%d) = %d files, %d chunks; want %d, %d",
-				tc.ask, files, chunks, tc.files, tc.chunks)
-		}
-		if files*chunks > maxConnections {
-			t.Errorf("%d files x %d chunks = %d, over the %d ceiling",
-				files, chunks, files*chunks, maxConnections)
+		if got := (&Downloader{Connections: tc.set}).connections(); got != tc.want {
+			t.Errorf("Connections=%d gave %d, want %d", tc.set, got, tc.want)
 		}
 	}
 }
 
-func TestPlanChunksRespectsBudget(t *testing.T) {
-	plan, ok := planChunks(200<<20, 2)
-	if !ok {
-		t.Fatal("a 200 MB file should chunk")
-	}
-	if len(plan.ranges) != 2 {
-		t.Fatalf("got %d ranges, want 2", len(plan.ranges))
-	}
-	// Ranges must tile the file exactly, with no gap or overlap.
-	var next int64
-	for i, r := range plan.ranges {
-		if r[0] != next {
-			t.Errorf("range %d starts at %d, want %d", i, r[0], next)
+func TestPiecesTileTheFileExactly(t *testing.T) {
+	for _, total := range []int64{1, pieceSize - 1, pieceSize, pieceSize + 1, 200 << 20} {
+		n := pieceCount(total)
+		if n < 1 {
+			t.Fatalf("total %d gave %d pieces", total, n)
 		}
-		next = r[1] + 1
+
+		var next int64
+		for i := range n {
+			start, end := pieceRange(i, total)
+			if start != next {
+				t.Errorf("total %d: piece %d starts at %d, want %d", total, i, start, next)
+			}
+			if end < start {
+				t.Errorf("total %d: piece %d is empty (%d-%d)", total, i, start, end)
+			}
+			next = end + 1
+		}
+		if next != total {
+			t.Errorf("total %d: pieces cover %d bytes", total, next)
+		}
 	}
-	if next != plan.total {
-		t.Errorf("ranges cover %d bytes, want %d", next, plan.total)
+}
+
+func TestWorthChunkingSkipsSmallFiles(t *testing.T) {
+	if worthChunking(minChunk - 1) {
+		t.Error("a file under minChunk should stream in one request")
+	}
+	if !worthChunking(minChunk) {
+		t.Error("a file at minChunk should split")
+	}
+	// An unknown length arrives as -1.
+	if worthChunking(-1) {
+		t.Error("an unknown length should stream in one request")
+	}
+}
+
+func TestPieceStateRemembersAcrossOpens(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.part"+stateSuffix)
+	const total = int64(10 * pieceSize)
+
+	s, err := openPieceState(path, total)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	for _, i := range []int{0, 3, 9} {
+		if err := s.set(i); err != nil {
+			t.Fatalf("set %d: %v", i, err)
+		}
+	}
+	if got, want := s.bytesHeld(total), int64(3*pieceSize); got != want {
+		t.Errorf("bytesHeld = %d, want %d", got, want)
+	}
+	s.Close()
+
+	again, err := openPieceState(path, total)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer again.Close()
+	for i := range pieceCount(total) {
+		want := i == 0 || i == 3 || i == 9
+		if again.has(i) != want {
+			t.Errorf("after reopen, piece %d held = %v, want %v", i, again.has(i), want)
+		}
+	}
+}
+
+// State from a different download must not be taken as a resume point, or its
+// pieces would be spliced into the wrong file.
+func TestPieceStateDiscardsAnotherDownload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.part"+stateSuffix)
+
+	s, err := openPieceState(path, 10*pieceSize)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := s.set(2); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	s.Close()
+
+	again, err := openPieceState(path, 20*pieceSize)
+	if err != nil {
+		t.Fatalf("reopen at a new size: %v", err)
+	}
+	defer again.Close()
+	if again.has(2) {
+		t.Error("a state file written for another total was adopted")
+	}
+	if got := again.bytesHeld(20 * pieceSize); got != 0 {
+		t.Errorf("bytesHeld = %d, want 0", got)
+	}
+}
+
+func TestPieceStateStartsFreshOnGarbage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.part"+stateSuffix)
+	if err := os.WriteFile(path, []byte("not a state file at all"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
-	if _, ok := planChunks(1<<20, 4); ok {
-		t.Error("a 1 MB file is not worth splitting")
+	s, err := openPieceState(path, 10*pieceSize)
+	if err != nil {
+		t.Fatalf("open: %v", err)
 	}
-	if _, ok := planChunks(200<<20, 1); ok {
-		t.Error("one chunk means a single stream")
+	defer s.Close()
+	if got := s.bytesHeld(10 * pieceSize); got != 0 {
+		t.Errorf("bytesHeld = %d, want 0", got)
 	}
 }

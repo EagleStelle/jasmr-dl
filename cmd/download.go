@@ -35,6 +35,9 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	if concurrency < 1 {
 		return fmt.Errorf("--concurrency must be at least 1, got %d", concurrency)
 	}
+	if connections < 1 {
+		return fmt.Errorf("--connections must be at least 1, got %d", connections)
+	}
 	if retries < 0 {
 		return fmt.Errorf("--retries cannot be negative, got %d", retries)
 	}
@@ -101,6 +104,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		Client:       client,
 		UserAgent:    userAgent,
 		OutputDir:    dir,
+		Connections:  connections,
 		Retries:      retries,
 		CoverPath:    fetchCover(ctx, cmd, client, album, dir),
 		Chapters:     chaptersFor(cmd, album),
@@ -109,7 +113,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		OnProgress:   prog.Update,
 	}
 
-	debugf(cmd, "%d files at once, %d retries per file", concurrency, retries)
+	debugf(cmd, "%d files at once, %d requests in flight, %d retries each", concurrency, connections, retries)
 	results := d.Run(ctx, jobs, concurrency)
 
 	// Drain the renderer first, or it fights the summary for the same lines.
