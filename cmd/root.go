@@ -42,7 +42,7 @@ var (
 	cookieFile  string
 	browserPath string
 	showBrowser bool
-	noCover     bool
+	noJacket    bool
 	noImages    bool
 	noChapters  bool
 	noSplit     bool
@@ -53,8 +53,8 @@ var (
 var rootCmd = &cobra.Command{
 	Use:     "jasmr-dl <url>",
 	Version: resolveVersion(),
-	Short:   "Download audio from a japaneseasmr.com post, tagged and with cover art",
-	Long: "Download audio from a japaneseasmr.com post, tagged and with cover art.\n\n" +
+	Short:   "Download audio from a japaneseasmr.com post, tagged and with jacket art",
+	Long: "Download audio from a japaneseasmr.com post, tagged and with jacket art.\n\n" +
 		"Output template (-o):\n" +
 		"  directories  {title} {rjcode} {circle} {artist} {date} {year} {month} {day}\n" +
 		"  filename     all of the above, plus {number} {chapter} {track} {tracktotal} {ext}\n\n" +
@@ -68,7 +68,7 @@ var rootCmd = &cobra.Command{
 		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"C:/Audio/{year}/{title}/{rjcode}_{number}.{ext}\"\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"<*|{number}_{chapter} [{circle}].{ext}>\"\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -P ./out -o \"{rjcode}/{number}.{ext}\"\n" +
-		"  jasmr-dl https://japaneseasmr.com/12345/ -C -I -T\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ -J -I -T\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -c C:\\path\\cookies.txt",
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -100,7 +100,7 @@ func init() {
 	f.StringVarP(&cookieFile, "cookies", "c", "", "path to a cookies.txt export, saved for later runs")
 	f.StringVar(&browserPath, "use-browser", "", "path to a browser executable that clears a Cloudflare challenge")
 	f.BoolVar(&showBrowser, "show-browser", false, "show that browser instead of running it headless")
-	f.BoolVarP(&noCover, "no-cover", "C", false, "do not embed cover art")
+	f.BoolVarP(&noJacket, "no-jacket", "J", false, "do not embed jacket art")
 	f.BoolVarP(&noImages, "no-images", "I", false, "do not save the rest of the post's gallery")
 	f.BoolVarP(&noChapters, "no-chapters", "H", false, "do not use the track list: no chapters, no split")
 	f.BoolVarP(&noSplit, "no-split", "S", false, "do not cut a chaptered stream into one file per chapter")

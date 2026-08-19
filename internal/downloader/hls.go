@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 
 	"golang.org/x/sync/errgroup"
 
@@ -207,13 +206,13 @@ func (d *Downloader) fetchSegments(ctx context.Context, job Job, segments []stri
 
 	// A playlist carries no byte total, and asking costs a request per segment,
 	// so the segments already written supply it.
-	sizes := &segmentSizes{count: int64(len(segments))}
+	sizes := &sizeTally{count: int64(len(segments))}
 	if d.OnStart != nil {
 		d.OnStart(label, 0) // unknown until the first segment lands
 	}
 	report := func() {
 		if d.OnProgress != nil {
-			done, total := sizes.stat()
+			_, done, total := sizes.stat()
 			d.OnProgress(label, done, total)
 		}
 	}
@@ -299,44 +298,6 @@ func (d *Downloader) fetchSegment(ctx context.Context, target, referer, path str
 		return 0, err
 	}
 	return written, nil
-}
-
-// segmentSizes projects a playlist's byte total from the segments already
-// written. Segments run to a near-uniform length, so the mean of the finished
-// ones across the count is within a few percent, and exact once the last lands.
-type segmentSizes struct {
-	mu    sync.Mutex
-	count int64 // segments the playlist lists
-	done  int64 // segments fully written
-	whole int64 // bytes those finished segments hold
-	bytes int64 // bytes on disk, segments in flight included
-}
-
-// advance records bytes written, whether or not their segment is finished.
-func (s *segmentSizes) advance(n int64) {
-	s.mu.Lock()
-	s.bytes += n
-	s.mu.Unlock()
-}
-
-func (s *segmentSizes) finish(size int64) {
-	s.mu.Lock()
-	s.whole += size
-	s.done++
-	s.mu.Unlock()
-}
-
-// stat returns the bytes on disk and the projected total, 0 until the first
-// segment finishes.
-func (s *segmentSizes) stat() (done, total int64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.done == 0 {
-		return s.bytes, 0
-	}
-	total = max(s.whole*s.count/s.done, s.bytes) // never under what is on disk
-	return s.bytes, total
 }
 
 const joinedName = "joined.ts"

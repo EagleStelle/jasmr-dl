@@ -39,7 +39,7 @@ func (s *Scraper) Album(ctx context.Context, pageURL string) (*Album, error) {
 	album := &Album{
 		PageURL:   pageURL,
 		Title:     extractTitle(doc),
-		CoverURL:  extractCover(doc, base),
+		JacketURL: extractJacket(doc, base),
 		Artists:   extractArtists(doc),
 		Circle:    extractCircle(doc),
 		RJCode:    extractRJCode(doc),
@@ -103,10 +103,10 @@ func extractTitle(doc *goquery.Document) string {
 	return strings.TrimSpace(doc.Find("title").First().Text())
 }
 
-// extractCover prefers poster: og:image is sometimes a site-wide default and
+// extractJacket prefers poster: og:image is sometimes a site-wide default and
 // the first <img> is the logo. Art and media hosts differ only by transposed
 // characters (weeabo0 vs weeab0o), so never derive one from the other.
-func extractCover(doc *goquery.Document, base *url.URL) string {
+func extractJacket(doc *goquery.Document, base *url.URL) string {
 	for _, sel := range []struct{ query, attr string }{
 		{"video[poster]", "poster"},
 		{`meta[property="og:image"]`, "content"},
@@ -127,7 +127,7 @@ func extractCover(doc *goquery.Document, base *url.URL) string {
 // size of a picture is only ever in an href.
 const gallerySelector = ".fotorama a[href]"
 
-// extractImages lists the post's gallery in page order, the cover first. A page
+// extractImages lists the post's gallery in page order, the jacket first. A page
 // can name one picture twice, so each URL is kept once.
 func extractImages(doc *goquery.Document, base *url.URL) []string {
 	var (

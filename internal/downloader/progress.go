@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mattn/go-runewidth"
@@ -63,6 +64,9 @@ type Progress struct {
 	lines map[string]*mpb.Bar
 	// totals mirrors each line's total; mpb exposes no getter.
 	totals map[string]int64
+	// counts holds the units behind a line whose bar measures bytes. Read from
+	// the line's own goroutine as it redraws, so it is an atomic.
+	counts map[string]*atomic.Int64
 
 	labelCols int
 }
@@ -77,6 +81,7 @@ func newProgress(w io.Writer, opts ...mpb.ContainerOption) *Progress {
 		p:         mpb.New(append([]mpb.ContainerOption{mpb.WithOutput(w)}, opts...)...),
 		lines:     make(map[string]*mpb.Bar),
 		totals:    make(map[string]int64),
+		counts:    make(map[string]*atomic.Int64),
 		labelCols: labelCols(w),
 	}
 }
@@ -96,14 +101,58 @@ func labelCols(w io.Writer) int {
 // Start creates the line for l.Key, reusing one that exists. A non-positive
 // total means the size is not known yet; Update adopts the real one later.
 func (b *Progress) Start(l Line, total int64) {
-	b.start(l, total, decor.CountersKibiByte("% .1f / % .1f", decor.WC{W: sizeCols, C: decor.DindentRight}))
+	b.start(l, total, byteCounters(), eta())
 }
 
 func (b *Progress) StartCount(l Line, total int64) {
-	b.start(l, total, decor.CountersNoUnit("%d / %d", decor.WC{W: sizeCols, C: decor.DindentRight}))
+	counters := decor.CountersNoUnit("%d / %d", decor.WC{W: sizeCols, C: decor.DindentRight})
+	b.start(l, total, counters, eta())
 }
 
-func (b *Progress) start(l Line, total int64, counters decor.Decorator) {
+// StartUnits opens a line measured in bytes that also carries how many of a set
+// have landed. count is how many there are; SetUnits moves the figure. The
+// units take the ETA's column: a total projected from what has finished moves,
+// and a time derived from a moving total is not worth printing.
+func (b *Progress) StartUnits(l Line, count int64) {
+	n := new(atomic.Int64)
+	b.mu.Lock()
+	if _, ok := b.counts[l.Key]; !ok {
+		b.counts[l.Key] = n
+	} else {
+		n = b.counts[l.Key]
+	}
+	b.mu.Unlock()
+
+	b.start(l, 0, byteCounters(), units(n, count))
+}
+
+// SetUnits moves the unit figure on a line StartUnits opened.
+func (b *Progress) SetUnits(key string, done int64) {
+	b.mu.Lock()
+	n := b.counts[key]
+	b.mu.Unlock()
+
+	if n != nil {
+		n.Store(done)
+	}
+}
+
+func byteCounters() decor.Decorator {
+	return decor.CountersKibiByte("% .1f / % .1f", decor.WC{W: sizeCols, C: decor.DindentRight})
+}
+
+// units renders "done/count" where the ETA would go. It stands whether the line
+// finished or was cut short: how many landed is a fact either way, unlike the
+// time an aborted line had left.
+func units(n *atomic.Int64, count int64) decor.Decorator {
+	return decor.Any(func(decor.Statistics) string {
+		return fmt.Sprintf("%d/%d", n.Load(), count)
+	}, decor.WC{W: etaCols, C: decor.DindentRight})
+}
+
+// start opens a line. counters fills the column after the percentage, trailer
+// the last one, so every line ends the same width whatever it puts there.
+func (b *Progress) start(l Line, total int64, counters, trailer decor.Decorator) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -125,7 +174,7 @@ func (b *Progress) start(l Line, total int64, counters decor.Decorator) {
 			decor.Name("  "),
 			counters,
 			decor.Name(" "),
-			eta(),
+			trailer,
 		),
 	)
 }

@@ -37,10 +37,19 @@ const (
 	// The rows a post opens beside its recordings, one of each.
 	imagesName   = "images"
 	chaptersName = "chapters"
-
-	// partSeparator joins a work to the part one file holds.
-	partSeparator = " - "
 )
+
+// templateShapes is every branch templateFor can pick, so a bad template is
+// refused before a run fetches anything. A split post holds one track, which is
+// why no shape pairs a split with more.
+var templateShapes = []struct {
+	split bool
+	files int
+}{
+	{split: false, files: 1}, // the whole post in one file, no counter
+	{split: false, files: 2}, // a file per track, trailing counter
+	{split: true, files: 1},  // a file per chapter, leading counter
+}
 
 func runDownload(cmd *cobra.Command, args []string) error {
 	target, err := parseAlbumURL(args[0])
@@ -56,15 +65,15 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	if retries < 0 {
 		return fmt.Errorf("--retries cannot be negative, got %d", retries)
 	}
-	// Settle a bad template before anything is fetched. Which branch of a <…>
-	// group applies is not known yet, so both are parsed.
+	// Settle a bad template before anything is fetched. Which shape the post
+	// takes is not known yet, so every shape is parsed.
 	var given string
 	if cmd.Flags().Changed("output") {
 		if given = strings.TrimSpace(outputTmpl); given == "" {
 			return errors.New("output template is empty")
 		}
-		for _, split := range []bool{false, true} {
-			if _, err := templateFor(given, split, 2); err != nil {
+		for _, shape := range templateShapes {
+			if _, err := templateFor(given, shape.split, shape.files); err != nil {
 				return err
 			}
 		}
@@ -80,7 +89,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	}
 
 	cmd.Printf("[info] fetching %s\n", target)
-	album, err := fetchAlbum(ctx, cmd, target.String(), &sess)
+	album, err := fetchAlbum(ctx, cmd, target, &sess)
 	if err != nil {
 		return err
 	}
@@ -91,7 +100,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	}
 	reportSource(cmd, album)
 
-	debugf(cmd, "cover: %s", orNone(album.CoverURL))
+	debugf(cmd, "jacket: %s", orNone(album.JacketURL))
 	debugf(cmd, "gallery: %d images", len(album.ImageURLs))
 	debugf(cmd, "album: %s, circle: %s, date: %s", orNone(album.RJCode), orNone(album.Circle), orNone(album.Date))
 	debugf(cmd, "chapters: %d", len(album.Chapters))
@@ -131,20 +140,19 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	prog := downloader.NewProgress(cmd.OutOrStdout())
 	lines := linesFor(album)
 
-	coverPath := fetchCover(ctx, cmd, sess, album, dir)
-	fetchImages(ctx, cmd, sess, album, dir, prog, lines)
+	pics := fetchPictures(ctx, cmd, &sess, album, dir, prog, lines)
 
 	d := &downloader.Downloader{
-		Client:       sess.client,
-		UserAgent:    sess.userAgent,
-		OutputDir:    dir,
-		Template:     tmpl,
-		Connections:  connections,
-		Retries:      retries,
-		CoverPath:    coverPath,
-		Chapters:     chapters,
-		Split:        split,
-		OnCoverError: func(name string, err error) { cmd.PrintErrf("[warn] %s: %v\n", name, err) },
+		Client:        sess.client,
+		UserAgent:     sess.userAgent,
+		OutputDir:     dir,
+		Template:      tmpl,
+		Connections:   connections,
+		Retries:       retries,
+		JacketPath:    pics.Jacket,
+		Chapters:      chapters,
+		Split:         split,
+		OnJacketError: func(name string, err error) { cmd.PrintErrf("[warn] %s: %v\n", name, err) },
 		OnChapterDropped: func(name string, start, total time.Duration) {
 			cmd.PrintErrf("[warn] chapter %s begins at %s, past the end of a %s stream; skipped\n",
 				name, start.Round(time.Second), total.Round(time.Second))
@@ -153,13 +161,13 @@ func runDownload(cmd *cobra.Command, args []string) error {
 			prog.Start(lines.line(downloader.KindRecording, name), total)
 		},
 		OnProgress: func(name string, done, total int64) {
-			prog.Update(lines.key(name), done, total)
+			prog.Update(lines.key(downloader.KindRecording, name), done, total)
 		},
 		OnSplitStart: func(total int) {
 			prog.StartCount(lines.line(downloader.KindChapter, chaptersName), int64(total))
 		},
 		OnSplitProgress: func(done, total int) {
-			prog.Update(lines.key(chaptersName), int64(done), int64(total))
+			prog.Update(lines.key(downloader.KindChapter, chaptersName), int64(done), int64(total))
 		},
 	}
 
@@ -214,8 +222,8 @@ func newSession(cmd *cobra.Command) (session, error) {
 }
 
 // use rebuilds the client around a set of cookies. One client per set: its
-// connection pool keeps sockets warm across the page fetch, the cover and every
-// track.
+// connection pool keeps sockets warm across the page fetch, the jacket and
+// every track.
 func (s *session) use(cookies []downloader.Cookie) error {
 	if len(cookies) == 0 {
 		s.client = downloader.NewClient(nil)
@@ -293,14 +301,7 @@ func besideBinary(name string) string {
 // foundCookieFile looks beside the binary and then in the working directory, so
 // the file only has to exist to be used.
 func foundCookieFile() string {
-	var dirs []string
-	if exe, err := os.Executable(); err == nil {
-		dirs = append(dirs, filepath.Dir(exe))
-	}
-	dirs = append(dirs, ".")
-
-	for _, dir := range dirs {
-		path := filepath.Join(dir, cookieFileName)
+	for _, path := range []string{besideBinary(cookieFileName), cookieFileName} {
 		if info, err := os.Stat(path); err == nil && !info.IsDir() {
 			return path
 		}
@@ -314,13 +315,7 @@ func foundCookieFile() string {
 // Failing to save is not worth ending a run over: the cookies work, they just
 // will not be there next time.
 func installCookies(cmd *cobra.Command, src string) {
-	exe, err := os.Executable()
-	if err != nil {
-		debugf(cmd, "cookies not saved: %v", err)
-		return
-	}
-
-	dst := filepath.Join(filepath.Dir(exe), cookieFileName)
+	dst := besideBinary(cookieFileName)
 	if sameFile(src, dst) {
 		return
 	}
@@ -364,7 +359,6 @@ func underBasePath(dir string) string {
 // it is still not somewhere --paths should move.
 func rooted(dir string) bool {
 	return filepath.IsAbs(dir) ||
-		filepath.VolumeName(dir) != "" ||
 		strings.HasPrefix(dir, "/") ||
 		strings.HasPrefix(dir, `\`) ||
 		hasDriveLetter(dir)
@@ -438,7 +432,7 @@ func splitting(chapters []scraper.Chapter) bool {
 }
 
 // tagsFor builds the metadata written into one file, n being its place in the
-// post. A split overrides the title and track number per chapter.
+// post. A split run replaces the title and track number per chapter as it cuts.
 func tagsFor(album *scraper.Album, track scraper.Track, n int) downloader.Tags {
 	if noTags {
 		return downloader.Tags{}
@@ -458,12 +452,13 @@ func tagsFor(album *scraper.Album, track scraper.Track, n int) downloader.Tags {
 	}
 }
 
-// titleFor names one file, so a split post does not tag every part alike.
+// titleFor names one file. album.Title reaches the metadata only here, so a
+// multi-track post carries the work and the part one file holds.
 func titleFor(album *scraper.Album, track scraper.Track) string {
 	if len(album.Tracks) < 2 || track.Name == "" {
 		return album.Title
 	}
-	return album.Title + partSeparator + track.Name
+	return album.Title + " - " + track.Name
 }
 
 // chaptersFor returns chapters only when one file holds the whole work.
@@ -478,22 +473,58 @@ func chaptersFor(cmd *cobra.Command, album *scraper.Album) []scraper.Chapter {
 	return album.Chapters
 }
 
-// fetchCover is best-effort: missing art must not stop a download.
-func fetchCover(ctx context.Context, cmd *cobra.Command, s session, album *scraper.Album, dir string) string {
-	if noCover || album.CoverURL == "" {
-		return ""
+// fetchPictures saves the jacket and the gallery together, on one line and in
+// parallel. Best-effort: missing art must not stop a download.
+func fetchPictures(ctx context.Context, cmd *cobra.Command, s *session, album *scraper.Album, dir string, prog *downloader.Progress, lines postLines) downloader.Pictures {
+	jacketURL, gallery := pictureURLs(album)
+	count := len(gallery)
+	if jacketURL != "" {
+		count++
 	}
-	path, err := downloader.FetchCover(ctx, s.client, s.userAgent, album.CoverURL, album.PageURL, dir)
-	if err != nil {
-		cmd.PrintErrf("[warn] no cover art: %v\n", err)
-		return ""
+	if count == 0 {
+		return downloader.Pictures{}
 	}
-	debugf(cmd, "cover saved to %s", path)
-	return path
+
+	// The byte total is projected from the pictures already down, so it moves
+	// until the last one lands.
+	line := lines.line(downloader.KindImage, imagesName)
+	prog.StartUnits(line, int64(count))
+
+	pics := downloader.FetchPictures(ctx, s.client, s.userAgent, jacketURL, gallery, album.PageURL, dir,
+		func(done int, bytes, total int64) {
+			prog.SetUnits(line.Key, int64(done))
+			prog.Update(line.Key, bytes, total)
+		},
+		func(err error) { cmd.PrintErrf("[warn] picture not saved: %v\n", err) })
+
+	debugf(cmd, "jacket: %s", orNone(pics.Jacket))
+	debugf(cmd, "gallery: %d saved", len(pics.Gallery))
+	return pics
+}
+
+// pictureURLs splits a post's pictures into the jacket the audio embeds and the
+// gallery behind it, dropping whatever the flags turn off.
+func pictureURLs(album *scraper.Album) (jacket string, gallery []string) {
+	if !noJacket {
+		jacket = album.JacketURL
+	}
+	if noImages {
+		return jacket, nil
+	}
+
+	for _, u := range album.ImageURLs {
+		// The jacket already sits beside the audio. Dropping it here rather
+		// than counting on it being first keeps the numbering the same on a
+		// post that opens its gallery with something else.
+		if u != album.JacketURL {
+			gallery = append(gallery, u)
+		}
+	}
+	return jacket, gallery
 }
 
 // postLines names one post's progress rows, all of them titled alike and told
-// apart by a key the post's address scopes.
+// apart by a key the post's address and the row's kind scope.
 type postLines struct {
 	scope string
 	label string
@@ -503,12 +534,14 @@ func linesFor(album *scraper.Album) postLines {
 	return postLines{scope: album.PageURL, label: progressLabel(album)}
 }
 
-func (p postLines) key(name string) string {
-	return p.scope + "\x00" + name
+// key scopes a row name by kind, so a track titled "images" opens a line of its
+// own rather than driving the gallery's.
+func (p postLines) key(kind, name string) string {
+	return p.scope + "\x00" + kind + "\x00" + name
 }
 
 func (p postLines) line(kind, name string) downloader.Line {
-	return downloader.Line{Key: p.key(name), Kind: kind, Label: p.label}
+	return downloader.Line{Key: p.key(kind, name), Kind: kind, Label: p.label}
 }
 
 // progressLabel titles a post's rows, falling back where it has no title.
@@ -520,33 +553,6 @@ func progressLabel(album *scraper.Album) string {
 		return album.RJCode
 	}
 	return album.PageURL
-}
-
-// fetchImages saves the rest of the post's gallery beside the jacket. Best
-// effort, like the cover: pictures are not what the run is for.
-func fetchImages(ctx context.Context, cmd *cobra.Command, s session, album *scraper.Album, dir string, prog *downloader.Progress, lines postLines) {
-	if noImages {
-		return
-	}
-
-	var urls []string
-	for _, u := range album.ImageURLs {
-		// The cover is the jacket. Dropping it here rather than counting on
-		// it being first keeps the numbering the same on a post that opens
-		// its gallery with something else.
-		if u != album.CoverURL {
-			urls = append(urls, u)
-		}
-	}
-	if len(urls) == 0 {
-		return
-	}
-
-	prog.StartCount(lines.line(downloader.KindImage, imagesName), int64(len(urls)))
-	paths := downloader.FetchImages(ctx, s.client, s.userAgent, urls, album.PageURL, dir,
-		func(done, total int) { prog.Update(lines.key(imagesName), int64(done), int64(total)) },
-		func(err error) { cmd.PrintErrf("[warn] image not saved: %v\n", err) })
-	debugf(cmd, "gallery: %d saved", len(paths))
 }
 
 // reportSource names what the post serves its audio as.
@@ -598,19 +604,19 @@ func plural(n int, noun string) string {
 }
 
 // parseAlbumURL matches the hostname, not a substring, so evil.com cannot pass.
-func parseAlbumURL(raw string) (*url.URL, error) {
+func parseAlbumURL(raw string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
-		return nil, fmt.Errorf("malformed URL %q: %w", raw, err)
+		return "", fmt.Errorf("malformed URL %q: %w", raw, err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("URL must be http or https, got %q", raw)
+		return "", fmt.Errorf("URL must be http or https, got %q", raw)
 	}
 	host := strings.ToLower(u.Hostname())
 	if host != targetHost && host != "www."+targetHost {
-		return nil, fmt.Errorf("not a %s URL: %q", targetHost, raw)
+		return "", fmt.Errorf("not a %s URL: %q", targetHost, raw)
 	}
-	return u, nil
+	return u.String(), nil
 }
 
 func orNone(s string) string {

@@ -14,16 +14,16 @@ const (
 
 // Album is everything a japaneseasmr.com post page yields.
 type Album struct {
-	PageURL  string
-	Title    string
-	CoverURL string
-	Artists  string
-	Circle   string
-	RJCode   string
-	Date     string
-	Tracks   []Track
+	PageURL   string
+	Title     string
+	JacketURL string
+	Artists   string
+	Circle    string
+	RJCode    string
+	Date      string
+	Tracks    []Track
 
-	// ImageURLs is the post's gallery in page order, the cover first.
+	// ImageURLs is the post's gallery in page order, the jacket first.
 	ImageURLs []string
 
 	// Chapters is present only where one stream holds the whole work.

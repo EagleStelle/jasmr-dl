@@ -3,13 +3,17 @@ package downloader
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // pngBody is a PNG signature with filler behind it: enough for the sniffer,
@@ -33,12 +37,16 @@ func TestFetchImageStoresTheSourceBytes(t *testing.T) {
 	defer ts.Close()
 
 	dir := t.TempDir()
-	path, err := fetchImage(context.Background(), ts.Client(), "test", ts.URL+"/a.jpg", ts.URL, dir, "01")
+	p := picture{url: ts.URL + "/a.jpg", dir: dir, name: "01"}
+	path, n, err := fetchImage(context.Background(), ts.Client(), "test", p, ts.URL, nil)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 	if got := filepath.Base(path); got != "01.png" {
 		t.Errorf("saved as %q, want 01.png from the sniffed content", got)
+	}
+	if want := int64(len(body)); n != want {
+		t.Errorf("reported %d bytes, want %d", n, want)
 	}
 
 	got, err := os.ReadFile(path)
@@ -61,7 +69,8 @@ func TestFetchImageRefusesOversizeRatherThanTruncating(t *testing.T) {
 	defer ts.Close()
 
 	dir := t.TempDir()
-	_, err := fetchImage(context.Background(), ts.Client(), "test", ts.URL+"/big.jpg", ts.URL, dir, "01")
+	p := picture{url: ts.URL + "/big.jpg", dir: dir, name: "01"}
+	_, _, err := fetchImage(context.Background(), ts.Client(), "test", p, ts.URL, nil)
 	if err == nil {
 		t.Fatal("oversize picture accepted, want an error")
 	}
@@ -75,6 +84,160 @@ func TestFetchImageRefusesOversizeRatherThanTruncating(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("%d files left behind, want none", len(entries))
+	}
+}
+
+// pictureServer serves a PNG of size for any path, declaring its length so the
+// projection has real figures to work from.
+func pictureServer(t *testing.T, size int) *httptest.Server {
+	t.Helper()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := pngBody(size)
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.Write(body)
+	}))
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// The jacket and the gallery share one line, so one call has to place both:
+// the jacket beside the audio, everything else numbered under images/.
+func TestFetchPicturesSavesTheJacketBesideTheGallery(t *testing.T) {
+	ts := pictureServer(t, 2048)
+
+	dir := t.TempDir()
+	gallery := []string{ts.URL + "/1.jpg", ts.URL + "/2.jpg", ts.URL + "/3.jpg"}
+	pics := FetchPictures(context.Background(), ts.Client(), "test", ts.URL+"/jacket.jpg", gallery, ts.URL, dir, nil, nil)
+
+	if got, want := pics.Jacket, filepath.Join(dir, jacketName+".png"); got != want {
+		t.Errorf("jacket at %q, want %q", got, want)
+	}
+	if len(pics.Gallery) != len(gallery) {
+		t.Fatalf("%d gallery pictures, want %d", len(pics.Gallery), len(gallery))
+	}
+	for i, path := range pics.Gallery {
+		want := filepath.Join(dir, imagesDirName, fmt.Sprintf("%02d.png", i+1))
+		if path != want {
+			t.Errorf("gallery %d at %q, want %q", i, path, want)
+		}
+	}
+}
+
+// Numbering is by position, so one picture failing does not shift the names of
+// the ones after it, however the parallel fetches interleave.
+func TestFetchPicturesNumbersByPositionThroughAFailure(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/2.jpg") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(pngBody(1024))
+	}))
+	defer ts.Close()
+
+	var mu sync.Mutex
+	var failures int
+
+	dir := t.TempDir()
+	gallery := []string{ts.URL + "/1.jpg", ts.URL + "/2.jpg", ts.URL + "/3.jpg"}
+	pics := FetchPictures(context.Background(), ts.Client(), "test", "", gallery, ts.URL, dir, nil,
+		func(error) {
+			mu.Lock()
+			failures++
+			mu.Unlock()
+		})
+
+	if failures != 1 {
+		t.Errorf("%d failures reported, want 1", failures)
+	}
+	want := []string{
+		filepath.Join(dir, imagesDirName, "01.png"),
+		filepath.Join(dir, imagesDirName, "03.png"),
+	}
+	if len(pics.Gallery) != len(want) {
+		t.Fatalf("saved %v, want %v", pics.Gallery, want)
+	}
+	for i, path := range pics.Gallery {
+		if path != want[i] {
+			t.Errorf("gallery %d at %q, want %q", i, path, want[i])
+		}
+	}
+}
+
+// Pictures go down together, not one after another. Every request blocks until
+// all of them have arrived, so a sequential fetch cannot finish this at all.
+func TestFetchPicturesFetchesInParallel(t *testing.T) {
+	const n = 6 // under imageWorkers, so nothing waits on a slot
+
+	arrived := make(chan struct{}, n)
+	release := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		arrived <- struct{}{}
+		select {
+		case <-release:
+		case <-time.After(10 * time.Second): // a wedged test fails, not hangs
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(pngBody(1024))
+	}))
+	defer ts.Close()
+
+	var gallery []string
+	for i := range n {
+		gallery = append(gallery, fmt.Sprintf("%s/%d.jpg", ts.URL, i))
+	}
+
+	done := make(chan Pictures, 1)
+	go func() {
+		done <- FetchPictures(context.Background(), ts.Client(), "test", "", gallery, ts.URL, t.TempDir(), nil, nil)
+	}()
+
+	for i := range n {
+		select {
+		case <-arrived:
+		case <-time.After(5 * time.Second):
+			close(release)
+			t.Fatalf("%d of %d requests in flight, want them overlapping", i, n)
+		}
+	}
+	close(release)
+
+	if pics := <-done; len(pics.Gallery) != n {
+		t.Errorf("saved %d pictures, want %d", len(pics.Gallery), n)
+	}
+}
+
+// The line carries both figures, so progress has to report the pictures
+// finished alongside the bytes and the total they project to.
+func TestFetchPicturesReportsUnitsAndBytes(t *testing.T) {
+	const size = 4096
+	ts := pictureServer(t, size)
+
+	gallery := []string{ts.URL + "/1.jpg", ts.URL + "/2.jpg", ts.URL + "/3.jpg"}
+
+	var mu sync.Mutex
+	var lastDone int
+	var lastBytes, lastTotal int64
+
+	FetchPictures(context.Background(), ts.Client(), "test", "", gallery, ts.URL, t.TempDir(),
+		func(done int, bytes, total int64) {
+			mu.Lock()
+			lastDone, lastBytes, lastTotal = done, bytes, total
+			mu.Unlock()
+		}, nil)
+
+	if lastDone != len(gallery) {
+		t.Errorf("finished at %d pictures, want %d", lastDone, len(gallery))
+	}
+	if want := int64(len(gallery) * size); lastBytes != want {
+		t.Errorf("finished at %d bytes, want %d", lastBytes, want)
+	}
+	// Every picture is down, so the projection is no longer a projection.
+	if lastTotal != lastBytes {
+		t.Errorf("total %d, want it exact at %d once the last landed", lastTotal, lastBytes)
 	}
 }
 
