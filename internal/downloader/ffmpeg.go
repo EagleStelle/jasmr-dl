@@ -18,7 +18,7 @@ type ffmpegPair struct {
 // copy dropped next to jasmr-dl works without a system install.
 //
 // The two are resolved together because they are used at different stages: an
-// ffmpeg with no ffprobe beside it would remux happily and then fail at cover
+// ffmpeg with no ffprobe beside it would remux happily and then fail at jacket
 // art, with the whole download already spent.
 var findFFmpeg = sync.OnceValues(func() (ffmpegPair, error) {
 	for _, find := range []func() (ffmpegPair, error){pairOnPath, pairBesideBinary} {

@@ -49,7 +49,7 @@ type Downloader struct {
 	OutputDir string
 	Retries   int
 
-	CoverPath string
+	JacketPath string
 
 	// Template names each finished file under OutputDir.
 	Template *naming.Template
@@ -72,8 +72,8 @@ type Downloader struct {
 	OnStart    func(name string, total int64)
 	OnProgress ProgressFunc
 
-	// OnCoverError reports art that could not be attached; the audio is fine.
-	OnCoverError func(name string, err error)
+	// OnJacketError reports art that could not be attached; the audio is fine.
+	OnJacketError func(name string, err error)
 
 	// OnChapterDropped reports a chapter the stream ends before, whose file or
 	// marker is never written.
@@ -241,8 +241,8 @@ func (d *Downloader) store(ctx context.Context, job Job, resp *http.Response, na
 // embedded attaches art and chapters. Failure is non-fatal: the audio is fine.
 func (d *Downloader) embedded(ctx context.Context, job Job, path string) (string, error) {
 	if err := d.tag(ctx, job.Tags, d.embeddedChapters(), path); err != nil {
-		if d.OnCoverError != nil {
-			d.OnCoverError(filepath.Base(path), err)
+		if d.OnJacketError != nil {
+			d.OnJacketError(filepath.Base(path), err)
 		}
 	}
 	return path, nil
@@ -267,7 +267,7 @@ func (d *Downloader) finished(ctx context.Context, final string, advertised int6
 	if advertised > 0 && size == advertised {
 		return true
 	}
-	return d.CoverPath != "" && d.hasCover(ctx, final)
+	return d.JacketPath != "" && d.hasJacket(ctx, final)
 }
 
 func (d *Downloader) acquire(ctx context.Context) error {

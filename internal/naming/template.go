@@ -105,7 +105,7 @@ func Parse(raw string) (*Template, error) {
 
 // checkExtension refuses a template that cannot end in an extension this tool
 // will write. Nothing downstream would accept the file, and finding that out
-// after a run has already fetched the cover art helps nobody.
+// after a run has already fetched the jacket art helps nobody.
 func checkExtension(file segment) error {
 	last := file.nodes[len(file.nodes)-1]
 	switch {

@@ -16,6 +16,7 @@ import (
 
 // What a line reports, printed in a column of its own.
 const (
+	KindJacket    = "jacket"
 	KindImage     = "image"
 	KindRecording = "recording"
 	KindChapter   = "chapter"

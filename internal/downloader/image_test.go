@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -33,7 +34,7 @@ func TestFetchImageStoresTheSourceBytes(t *testing.T) {
 	defer ts.Close()
 
 	dir := t.TempDir()
-	path, err := fetchImage(context.Background(), ts.Client(), "test", ts.URL+"/a.jpg", ts.URL, dir, "01")
+	path, err := fetchImage(context.Background(), ts.Client(), "test", ts.URL+"/a.jpg", ts.URL, dir, "01", nil)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -61,7 +62,7 @@ func TestFetchImageRefusesOversizeRatherThanTruncating(t *testing.T) {
 	defer ts.Close()
 
 	dir := t.TempDir()
-	_, err := fetchImage(context.Background(), ts.Client(), "test", ts.URL+"/big.jpg", ts.URL, dir, "01")
+	_, err := fetchImage(context.Background(), ts.Client(), "test", ts.URL+"/big.jpg", ts.URL, dir, "01", nil)
 	if err == nil {
 		t.Fatal("oversize picture accepted, want an error")
 	}
@@ -75,6 +76,66 @@ func TestFetchImageRefusesOversizeRatherThanTruncating(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("%d files left behind, want none", len(entries))
+	}
+}
+
+// The jacket's line counts bytes, so the reader has to report every read and
+// end on the length the host declared.
+func TestFetchJacketReportsProgress(t *testing.T) {
+	body := pngBody(64 << 10)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		// Past the sniff buffer net/http sends chunked unless told the length.
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.Write(body)
+	}))
+	defer ts.Close()
+
+	var reads int
+	var lastDone, lastTotal int64
+	_, err := FetchJacket(context.Background(), ts.Client(), "test", ts.URL+"/j.jpg", ts.URL, t.TempDir(),
+		func(done, total int64) {
+			reads++
+			lastDone, lastTotal = done, total
+		})
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+
+	if reads == 0 {
+		t.Fatal("no progress reported")
+	}
+	if want := int64(len(body)); lastDone != want {
+		t.Errorf("finished at %d bytes, want %d", lastDone, want)
+	}
+	if want := int64(len(body)); lastTotal != want {
+		t.Errorf("total %d, want the declared %d", lastTotal, want)
+	}
+}
+
+// A host that declares no length still has to report bytes, leaving the total
+// for the line to treat as unknown.
+func TestFetchJacketReportsProgressWithoutALength(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		// Chunked: the response carries no Content-Length.
+		w.(http.Flusher).Flush()
+		w.Write(pngBody(32 << 10))
+	}))
+	defer ts.Close()
+
+	var lastDone, lastTotal int64
+	_, err := FetchJacket(context.Background(), ts.Client(), "test", ts.URL+"/j.jpg", ts.URL, t.TempDir(),
+		func(done, total int64) { lastDone, lastTotal = done, total })
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+
+	if want := int64(32 << 10); lastDone != want {
+		t.Errorf("finished at %d bytes, want %d", lastDone, want)
+	}
+	if lastTotal != -1 {
+		t.Errorf("total %d, want -1 where the host declared none", lastTotal)
 	}
 }
 

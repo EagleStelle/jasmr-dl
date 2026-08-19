@@ -29,15 +29,16 @@ const (
 )
 
 // Extensions whose muxer can carry art and chapters.
-var coverMuxers = map[string]string{
+var jacketMuxers = map[string]string{
 	".m4a":  "ipod",
 	".mp3":  "mp3",
 	".flac": "flac",
 }
 
-// FetchCover saves album art into dir as the jacket and returns its path.
-func FetchCover(ctx context.Context, client *http.Client, userAgent, coverURL, referer, dir string) (string, error) {
-	return fetchImage(ctx, client, userAgent, coverURL, referer, dir, jacketName)
+// FetchJacket saves album art into dir as the jacket and returns its path.
+// onProgress reports bytes read against the length the host declared.
+func FetchJacket(ctx context.Context, client *http.Client, userAgent, jacketURL, referer, dir string, onProgress func(done, total int64)) (string, error) {
+	return fetchImage(ctx, client, userAgent, jacketURL, referer, dir, jacketName, onProgress)
 }
 
 // FetchImages saves urls into an images subfolder of dir, numbered in page
@@ -50,7 +51,7 @@ func FetchImages(ctx context.Context, client *http.Client, userAgent string, url
 	for i, u := range urls {
 		// Numbered by position, not by how many landed, so one picture
 		// failing does not shift the names of the pictures after it.
-		path, err := fetchImage(ctx, client, userAgent, u, referer, dir, fmt.Sprintf("%02d", i+1))
+		path, err := fetchImage(ctx, client, userAgent, u, referer, dir, fmt.Sprintf("%02d", i+1), nil)
 		if err != nil {
 			if onError != nil {
 				onError(err)
@@ -70,8 +71,8 @@ func FetchImages(ctx context.Context, client *http.Client, userAgent string, url
 }
 
 // fetchImage saves one picture into dir under name, carrying the extension its
-// bytes call for.
-func fetchImage(ctx context.Context, client *http.Client, userAgent, imageURL, referer, dir, name string) (string, error) {
+// bytes call for. onProgress may be nil.
+func fetchImage(ctx context.Context, client *http.Client, userAgent, imageURL, referer, dir, name string, onProgress func(done, total int64)) (string, error) {
 	req, err := newMediaRequest(ctx, imageURL, referer, userAgent)
 	if err != nil {
 		return "", err
@@ -93,7 +94,12 @@ func fetchImage(ctx context.Context, client *http.Client, userAgent, imageURL, r
 	// One byte past the cap, so a picture that overruns it is refused rather
 	// than written short: a truncated file still sniffs as an image, so nothing
 	// downstream would ever notice the missing half.
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageBytes+1))
+	var body io.Reader = io.LimitReader(resp.Body, maxImageBytes+1)
+	if onProgress != nil {
+		body = &countingReader{r: body, total: resp.ContentLength, report: onProgress}
+	}
+
+	data, err := io.ReadAll(body)
 	if err != nil {
 		return "", err
 	}
@@ -114,6 +120,24 @@ func fetchImage(ctx context.Context, client *http.Client, userAgent, imageURL, r
 		return "", err
 	}
 	return path, nil
+}
+
+// countingReader reports how far through a body a read has got. total is what
+// the host declared, -1 where it declared nothing.
+type countingReader struct {
+	r      io.Reader
+	total  int64
+	done   int64
+	report func(done, total int64)
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	if n > 0 {
+		c.done += int64(n)
+		c.report(c.done, c.total)
+	}
+	return n, err
 }
 
 func imageExt(data []byte) string {
@@ -146,8 +170,8 @@ func (d *Downloader) probeDuration(ctx context.Context, audio string) (time.Dura
 	return time.Duration(secs * float64(time.Second)), nil
 }
 
-// hasCover stops a rerun re-downloading a tagged file, whose length changed.
-func (d *Downloader) hasCover(ctx context.Context, audio string) bool {
+// hasJacket stops a rerun re-downloading a tagged file, whose length changed.
+func (d *Downloader) hasJacket(ctx context.Context, audio string) bool {
 	out, err := d.ffprobe(ctx,
 		"-select_streams", "v",
 		"-show_entries", "stream=codec_type",

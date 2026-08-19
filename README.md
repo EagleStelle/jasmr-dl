@@ -1,9 +1,9 @@
 # jasmr-dl
 
-Download audio from [japaneseasmr.com](https://japaneseasmr.com) posts, tagged and with cover art.
+Download audio from [japaneseasmr.com](https://japaneseasmr.com) posts, tagged and with jacket art.
 
 - Downloads every part of a post in parallel
-- Embeds cover art and writes title, artist, circle, RJ code, date and track numbers
+- Embeds jacket art and writes title, artist, circle, RJ code, date and track numbers
 - Cuts a chaptered stream into one file per chapter
 - Saves the post's image gallery alongside the audio
 - Handles posts that serve only the site's stream
@@ -51,7 +51,7 @@ jasmr-dl https://japaneseasmr.com/12345/ -j 64 -N 8
 Audio only:
 
 ```
-jasmr-dl https://japaneseasmr.com/12345/ -C -I -T
+jasmr-dl https://japaneseasmr.com/12345/ -J -I -T
 ```
 
 `Ctrl+C` cancels. Exit status is non-zero only when every file fails.
@@ -89,7 +89,7 @@ The default is `{year}/{rjcode}/<{rjcode}_{number}.{ext}|{number}_{chapter}.{ext
 written in the same divider syntax `-o` takes: the same directory either way, a
 leaf per shape.
 
-Cover art and the gallery follow the audio: `jacket.jpg` beside it, the rest
+Jacket art and the gallery follow the audio: `jacket.jpg` beside it, the rest
 under `images/`.
 
 ### Divider
@@ -159,7 +159,7 @@ The stream is cut into one file per chapter.
 | `-c, --cookies` | | Path to a `cookies.txt` export, saved for later runs |
 | `--use-browser` | | Path to a browser executable that clears a Cloudflare challenge |
 | `--show-browser` | `false` | Show that browser instead of running it headless |
-| `-C, --no-cover` | `false` | Do not embed cover art |
+| `-J, --no-jacket` | `false` | Do not embed jacket art |
 | `-I, --no-images` | `false` | Do not save the rest of the post's gallery |
 | `-H, --no-chapters` | `false` | Do not use the track list: no chapters, no split |
 | `-S, --no-split` | `false` | Do not cut a chaptered stream into one file per chapter |
@@ -168,9 +168,9 @@ The stream is cut into one file per chapter.
 
 ## Requirements
 
-`ffmpeg` and `ffprobe` are required for cover art, tags, and posts that serve only the site's stream. Put both on `PATH`, or beside the `jasmr-dl` binary.
+`ffmpeg` and `ffprobe` are required for jacket art, tags, and posts that serve only the site's stream. Put both on `PATH`, or beside the `jasmr-dl` binary.
 
-Without them, use `-C -T -H` to download the audio untouched. Stream-only posts will not work.
+Without them, use `-J -T -H` to download the audio untouched. Stream-only posts will not work.
 
 ## Cloudflare
 

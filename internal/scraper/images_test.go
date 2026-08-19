@@ -2,7 +2,7 @@ package scraper
 
 import "testing"
 
-// Mirrors a post's lightbox: the cover, the work's own pictures, then the
+// Mirrors a post's lightbox: the jacket, the work's own pictures, then the
 // per-part art, each anchor empty and the picture only in its href. The
 // thumbnails around it repeat two of them and carry a placeholder in src.
 const galleryPage = `
@@ -38,7 +38,7 @@ func TestExtractImagesKeepsGalleryOrderAndDropsNonPictures(t *testing.T) {
 	}
 }
 
-// A post that never opened a lightbox still has its cover, read elsewhere.
+// A post that never opened a lightbox still has its jacket, read elsewhere.
 func TestExtractImagesIgnoresPageChrome(t *testing.T) {
 	doc, base := parse(t, `
 <a href="https://japaneseasmr.com/logo.png">home</a>
