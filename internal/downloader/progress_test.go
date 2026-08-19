@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"bytes"
 	"io"
 	"math"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mattn/go-runewidth"
+	"github.com/vbauerster/mpb/v8"
 )
 
 // waitOrFail runs bs.Wait in a goroutine so a hang shows up as a test failure
@@ -26,9 +28,13 @@ func waitOrFail(t *testing.T, bs *Progress) {
 	}
 }
 
+func line(key string) Line {
+	return Line{Key: key, Kind: KindRecording, Label: "ある夏の日"}
+}
+
 func TestWaitReturnsWhenBarsComplete(t *testing.T) {
 	bs := NewProgress(io.Discard)
-	bs.Start("a.m4a", 100)
+	bs.Start(line("a.m4a"), 100)
 	bs.Update("a.m4a", 100, 100)
 	waitOrFail(t, bs)
 }
@@ -38,7 +44,7 @@ func TestWaitReturnsWhenBarsComplete(t *testing.T) {
 // after any download error.
 func TestWaitReturnsWhenTransferFailedMidway(t *testing.T) {
 	bs := NewProgress(io.Discard)
-	bs.Start("a.m4a", 1000)
+	bs.Start(line("a.m4a"), 1000)
 	bs.Update("a.m4a", 300, 1000)
 	waitOrFail(t, bs)
 }
@@ -47,7 +53,7 @@ func TestWaitReturnsWhenTransferFailedMidway(t *testing.T) {
 // arrives, otherwise it can never reach completion.
 func TestUnknownTotalIsAdoptedLater(t *testing.T) {
 	bs := NewProgress(io.Discard)
-	bs.Start("a.m4a", -1)
+	bs.Start(line("a.m4a"), -1)
 
 	if got := bs.totals["a.m4a"]; got != 0 {
 		t.Fatalf("negative total should normalize to 0 (unknown), got %d", got)
@@ -65,14 +71,81 @@ func TestUnknownTotalIsAdoptedLater(t *testing.T) {
 // Retries re-report the same filename. That must not stack duplicate lines.
 func TestRetryReusesBar(t *testing.T) {
 	bs := NewProgress(io.Discard)
-	bs.Start("a.m4a", 100)
-	bs.Start("a.m4a", 100)
+	bs.Start(line("a.m4a"), 100)
+	bs.Start(line("a.m4a"), 100)
 
 	if len(bs.lines) != 1 {
 		t.Fatalf("lines = %d, want 1", len(bs.lines))
 	}
 	bs.Update("a.m4a", 100, 100)
 	waitOrFail(t, bs)
+}
+
+// Two posts can share a title; the key is what tells their rows apart.
+func TestSharedLabelStillOpensItsOwnLine(t *testing.T) {
+	bs := NewProgress(io.Discard)
+	const label = "ある夏の日"
+
+	bs.Start(Line{Key: "first\x00a.m4a", Kind: KindRecording, Label: label}, 100)
+	bs.Start(Line{Key: "second\x00a.m4a", Kind: KindRecording, Label: label}, 100)
+
+	if len(bs.lines) != 2 {
+		t.Fatalf("lines = %d, want 2", len(bs.lines))
+	}
+	bs.Update("first\x00a.m4a", 100, 100)
+	bs.Update("second\x00a.m4a", 100, 100)
+	waitOrFail(t, bs)
+}
+
+func TestLineLeadsWithItsKindThenTheTitle(t *testing.T) {
+	for _, tc := range []struct {
+		kind string
+		want string
+	}{
+		{KindImage, "[progress][image]     ある夏の日"},
+		{KindRecording, "[progress][recording] ある夏の日"},
+		{KindChapter, "[progress][chapter]   ある夏の日"},
+	} {
+		var buf bytes.Buffer
+		// A buffer is no terminal, so mpb only draws when told to refresh.
+		bs := newProgress(&buf, mpb.WithAutoRefresh())
+		bs.Start(Line{Key: "k", Kind: tc.kind, Label: "ある夏の日"}, 100)
+		bs.Update("k", 100, 100)
+		waitOrFail(t, bs)
+
+		if got := buf.String(); !strings.Contains(got, tc.want) {
+			t.Errorf("%s row = %q, want it to carry %q", tc.kind, got, tc.want)
+		}
+	}
+}
+
+func TestKindColumnFitsEveryKind(t *testing.T) {
+	for _, kind := range []string{KindImage, KindRecording, KindChapter} {
+		if got := len("[" + kind + "]"); got >= kindCols {
+			t.Errorf("[%s] takes %d columns, which the %d-column kind field cannot pad", kind, got, kindCols)
+		}
+	}
+}
+
+func TestLabelColsStayWithinTheTerminal(t *testing.T) {
+	for _, width := range []int{0, 40, 80, 100, 200} {
+		cols := min(max(width-fixedCols, minLabelCols), maxLabelCols)
+		switch {
+		case cols < minLabelCols:
+			t.Errorf("width %d: label column %d is under the %d-column floor", width, cols, minLabelCols)
+		case cols > maxLabelCols:
+			t.Errorf("width %d: label column %d is over the %d-column ceiling", width, cols, maxLabelCols)
+		case width >= 80 && cols+fixedCols > width:
+			t.Errorf("width %d: the line runs to %d columns", width, cols+fixedCols)
+		}
+	}
+}
+
+func TestLabelColsFallBackOffATerminal(t *testing.T) {
+	want := min(max(assumedCols-fixedCols, minLabelCols), maxLabelCols)
+	if got := labelCols(io.Discard); got != want {
+		t.Fatalf("labelCols(io.Discard) = %d, want %d", got, want)
+	}
 }
 
 // Progress for a name that was never started is ignored rather than panicking
@@ -186,8 +259,9 @@ func TestTruncate(t *testing.T) {
 // progress line is pushed off-screen. Double-width runes are the case that a
 // rune-count budget gets wrong, so measure columns.
 func TestTruncateBoundsColumns(t *testing.T) {
+	cols := labelCols(io.Discard)
 	long := strings.Repeat("耳", 200)
-	if got := runewidth.StringWidth(truncate(long, nameCols)); got > nameCols {
-		t.Fatalf("truncated to %d columns, want at most %d", got, nameCols)
+	if got := runewidth.StringWidth(truncate(long, cols)); got > cols {
+		t.Fatalf("truncated to %d columns, want at most %d", got, cols)
 	}
 }

@@ -4,18 +4,25 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/mattn/go-runewidth"
 	"github.com/vbauerster/mpb/v8"
 	"github.com/vbauerster/mpb/v8/decor"
+	"golang.org/x/term"
 )
 
-// nameCols bounds the label column in terminal columns rather than runes.
-// Japanese titles are double-width, so a rune budget would still wrap the line.
-// With the columns beside it, a line fits an 80-column terminal.
-const nameCols = 24
+// What a line reports, printed in a column of its own.
+const (
+	KindImage     = "image"
+	KindRecording = "recording"
+	KindChapter   = "chapter"
+)
+
+// kindCols fits "[recording] ", the widest of the three.
+const kindCols = len("[recording]") + 1
 
 // sizeCols holds the byte counters, so every line's ETA starts in the same
 // column. "999.9 MiB / 999.9 MiB" is 21 columns.
@@ -24,62 +31,97 @@ const sizeCols = 21
 // etaCols fits "ETA 12:34:56", the longest form printed.
 const etaCols = 12
 
+// percentCols fits the percentage and the column mpb pads it into.
+const percentCols = 5
+
 // progressTag prefixes every progress line, matching [info] and [done].
-const progressTag = "[progress] "
+const progressTag = "[progress]"
+
+const (
+	// fixedCols is every column but the label.
+	fixedCols = len(progressTag) + kindCols + 1 + 1 + percentCols + 2 + sizeCols + 1 + etaCols
+
+	minLabelCols = 14
+	maxLabelCols = 40
+
+	// assumedCols stands in where the output has no width to read.
+	assumedCols = 80
+)
+
+// Line is one row of the display. Key tells rows apart; Label is what shows.
+type Line struct {
+	Key   string
+	Kind  string
+	Label string
+}
 
 // Progress renders one live line per file: percentage, bytes on disk over the
-// bytes expected, and the time left. Its Start and Update methods satisfy
-// Downloader.OnStart and Downloader.OnProgress.
-//
-// Safe for concurrent use: every worker reports into the same set.
+// bytes expected, and the time left. Safe for concurrent use.
 type Progress struct {
 	p     *mpb.Progress
 	mu    sync.Mutex
 	lines map[string]*mpb.Bar
-	// totals mirrors each line's total; mpb exposes no getter, and a line
-	// created before the size was known needs it set exactly once.
+	// totals mirrors each line's total; mpb exposes no getter.
 	totals map[string]int64
+
+	labelCols int
 }
 
-// NewProgress renders to w. Pass the command's output writer rather than
-// assuming os.Stdout, so output can be redirected and tested.
+// NewProgress renders to w.
 func NewProgress(w io.Writer) *Progress {
+	return newProgress(w)
+}
+
+func newProgress(w io.Writer, opts ...mpb.ContainerOption) *Progress {
 	return &Progress{
-		p:      mpb.New(mpb.WithOutput(w)),
-		lines:  make(map[string]*mpb.Bar),
-		totals: make(map[string]int64),
+		p:         mpb.New(append([]mpb.ContainerOption{mpb.WithOutput(w)}, opts...)...),
+		lines:     make(map[string]*mpb.Bar),
+		totals:    make(map[string]int64),
+		labelCols: labelCols(w),
 	}
 }
 
-// Start creates the line for name. A retry re-reports the same name, so an
-// existing line is reused rather than duplicated. A non-positive total means
-// the size is not known yet; Update adopts the real one when it arrives.
-func (b *Progress) Start(name string, total int64) {
-	b.start(name, total, decor.CountersKibiByte("% .1f / % .1f", decor.WC{W: sizeCols, C: decor.DindentRight}))
+// labelCols fits the label column to the terminal, falling back to assumedCols
+// where there is no width to read.
+func labelCols(w io.Writer) int {
+	width := assumedCols
+	if f, ok := w.(*os.File); ok {
+		if cols, _, err := term.GetSize(int(f.Fd())); err == nil && cols > 0 {
+			width = cols
+		}
+	}
+	return min(max(width-fixedCols, minLabelCols), maxLabelCols)
 }
 
-func (b *Progress) StartCount(name string, total int64) {
-	b.start(name, total, decor.CountersNoUnit("%d / %d", decor.WC{W: sizeCols, C: decor.DindentRight}))
+// Start creates the line for l.Key, reusing one that exists. A non-positive
+// total means the size is not known yet; Update adopts the real one later.
+func (b *Progress) Start(l Line, total int64) {
+	b.start(l, total, decor.CountersKibiByte("% .1f / % .1f", decor.WC{W: sizeCols, C: decor.DindentRight}))
 }
 
-func (b *Progress) start(name string, total int64, counters decor.Decorator) {
+func (b *Progress) StartCount(l Line, total int64) {
+	b.start(l, total, decor.CountersNoUnit("%d / %d", decor.WC{W: sizeCols, C: decor.DindentRight}))
+}
+
+func (b *Progress) start(l Line, total int64, counters decor.Decorator) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if _, ok := b.lines[name]; ok {
+	if _, ok := b.lines[l.Key]; ok {
 		return
 	}
 	if total < 0 {
 		total = 0 // mpb treats a non-positive total as unknown
 	}
-	b.totals[name] = total
+	b.totals[l.Key] = total
 	// NopStyle draws no bar, leaving just the decorators.
-	b.lines[name] = b.p.New(total, mpb.NopStyle(),
+	b.lines[l.Key] = b.p.New(total, mpb.NopStyle(),
 		mpb.PrependDecorators(
 			decor.Name(progressTag),
-			decor.Name(truncate(name, nameCols), decor.WC{W: nameCols + 1, C: decor.DindentRight}),
-			decor.Name(" "), // the name column clips flush, so separate it here
-			decor.Percentage(decor.WC{W: 5}),
+			decor.Name("["+l.Kind+"]", decor.WC{W: kindCols, C: decor.DindentRight}),
+			decor.Name(truncate(l.Label, b.labelCols), decor.WC{W: b.labelCols + 1, C: decor.DindentRight}),
+			decor.Name(" "), // the label column clips flush
+			decor.Percentage(decor.WC{W: percentCols}),
 			decor.Name("  "),
 			counters,
 			decor.Name(" "),
@@ -88,14 +130,13 @@ func (b *Progress) start(name string, total int64, counters decor.Decorator) {
 	)
 }
 
-// Update advances the line for name. done is an absolute byte count, so a
-// resumed transfer starting mid-file reports correctly without extra state.
-func (b *Progress) Update(name string, done, total int64) {
+// Update advances the line for key. done is an absolute byte count.
+func (b *Progress) Update(key string, done, total int64) {
 	b.mu.Lock()
-	line, ok := b.lines[name]
-	stale := ok && total > 0 && b.totals[name] != total
+	line, ok := b.lines[key]
+	stale := ok && total > 0 && b.totals[key] != total
 	if stale {
-		b.totals[name] = total
+		b.totals[key] = total
 	}
 	b.mu.Unlock()
 
@@ -108,9 +149,7 @@ func (b *Progress) Update(name string, done, total int64) {
 	line.SetCurrent(done)
 }
 
-// Wait drains the renderer. Lines for failed transfers are aborted first:
-// mpb.Progress.Wait blocks until every line completes, so an unfinished one
-// would hang the program.
+// Wait drains the renderer, aborting unfinished lines first so it cannot hang.
 func (b *Progress) Wait() {
 	b.mu.Lock()
 	for _, line := range b.lines {

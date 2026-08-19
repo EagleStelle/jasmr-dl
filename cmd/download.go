@@ -34,8 +34,9 @@ const (
 
 	genre = "ASMR"
 
-	imagesLabel   = "images"
-	chaptersLabel = "chapters"
+	// The rows a post opens beside its recordings, one of each.
+	imagesName   = "images"
+	chaptersName = "chapters"
 
 	// partSeparator joins a work to the part one file holds.
 	partSeparator = " - "
@@ -128,9 +129,10 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	}
 
 	prog := downloader.NewProgress(cmd.OutOrStdout())
+	lines := linesFor(album)
 
 	coverPath := fetchCover(ctx, cmd, sess, album, dir)
-	fetchImages(ctx, cmd, sess, album, dir, prog)
+	fetchImages(ctx, cmd, sess, album, dir, prog, lines)
 
 	d := &downloader.Downloader{
 		Client:       sess.client,
@@ -147,10 +149,18 @@ func runDownload(cmd *cobra.Command, args []string) error {
 			cmd.PrintErrf("[warn] chapter %s begins at %s, past the end of a %s stream; skipped\n",
 				name, start.Round(time.Second), total.Round(time.Second))
 		},
-		OnStart:         prog.Start,
-		OnProgress:      prog.Update,
-		OnSplitStart:    func(total int) { prog.StartCount(chaptersLabel, int64(total)) },
-		OnSplitProgress: func(done, total int) { prog.Update(chaptersLabel, int64(done), int64(total)) },
+		OnStart: func(name string, total int64) {
+			prog.Start(lines.line(downloader.KindRecording, name), total)
+		},
+		OnProgress: func(name string, done, total int64) {
+			prog.Update(lines.key(name), done, total)
+		},
+		OnSplitStart: func(total int) {
+			prog.StartCount(lines.line(downloader.KindChapter, chaptersName), int64(total))
+		},
+		OnSplitProgress: func(done, total int) {
+			prog.Update(lines.key(chaptersName), int64(done), int64(total))
+		},
 	}
 
 	debugf(cmd, "%d files at once, %d requests in flight, %d retries each", concurrency, connections, retries)
@@ -482,9 +492,39 @@ func fetchCover(ctx context.Context, cmd *cobra.Command, s session, album *scrap
 	return path
 }
 
+// postLines names one post's progress rows, all of them titled alike and told
+// apart by a key the post's address scopes.
+type postLines struct {
+	scope string
+	label string
+}
+
+func linesFor(album *scraper.Album) postLines {
+	return postLines{scope: album.PageURL, label: progressLabel(album)}
+}
+
+func (p postLines) key(name string) string {
+	return p.scope + "\x00" + name
+}
+
+func (p postLines) line(kind, name string) downloader.Line {
+	return downloader.Line{Key: p.key(name), Kind: kind, Label: p.label}
+}
+
+// progressLabel titles a post's rows, falling back where it has no title.
+func progressLabel(album *scraper.Album) string {
+	switch {
+	case album.Title != "":
+		return album.Title
+	case album.RJCode != "":
+		return album.RJCode
+	}
+	return album.PageURL
+}
+
 // fetchImages saves the rest of the post's gallery beside the jacket. Best
 // effort, like the cover: pictures are not what the run is for.
-func fetchImages(ctx context.Context, cmd *cobra.Command, s session, album *scraper.Album, dir string, prog *downloader.Progress) {
+func fetchImages(ctx context.Context, cmd *cobra.Command, s session, album *scraper.Album, dir string, prog *downloader.Progress, lines postLines) {
 	if noImages {
 		return
 	}
@@ -502,9 +542,9 @@ func fetchImages(ctx context.Context, cmd *cobra.Command, s session, album *scra
 		return
 	}
 
-	prog.StartCount(imagesLabel, int64(len(urls)))
+	prog.StartCount(lines.line(downloader.KindImage, imagesName), int64(len(urls)))
 	paths := downloader.FetchImages(ctx, s.client, s.userAgent, urls, album.PageURL, dir,
-		func(done, total int) { prog.Update(imagesLabel, int64(done), int64(total)) },
+		func(done, total int) { prog.Update(lines.key(imagesName), int64(done), int64(total)) },
 		func(err error) { cmd.PrintErrf("[warn] image not saved: %v\n", err) })
 	debugf(cmd, "gallery: %d saved", len(paths))
 }
