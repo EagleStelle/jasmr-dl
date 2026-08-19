@@ -90,9 +90,16 @@ func (d *Downloader) FetchPictures(ctx context.Context, jacketURL string, galler
 			}
 			defer d.Budget.pictures.leave()
 
-			// got is this goroutine's alone, so the rollback needs no lock.
-			var got int64
-			path, n, err := fetchImage(gctx, d.Client, d.UserAgent, p, referer, func(add int64) {
+			// Both are this goroutine's alone, so neither needs a lock.
+			var (
+				got        int64
+				advertised int64
+			)
+			path, n, err := fetchImage(gctx, d.Client, d.UserAgent, p, referer, func(sz int64) {
+				advertised = sz
+				sizes.know(sz)
+				report()
+			}, func(add int64) {
 				got += add
 				sizes.advance(add)
 				report()
@@ -101,8 +108,9 @@ func (d *Downloader) FetchPictures(ctx context.Context, jacketURL string, galler
 				// Nothing was written, so those bytes are not on disk.
 				if got > 0 {
 					sizes.advance(-got)
-					report()
 				}
+				sizes.rollback(advertised)
+				report()
 				// A cancelled run would otherwise report every picture left.
 				if gctx.Err() != nil {
 					return gctx.Err()
@@ -113,7 +121,7 @@ func (d *Downloader) FetchPictures(ctx context.Context, jacketURL string, galler
 				return nil
 			}
 			paths[i] = path
-			sizes.finish(n)
+			sizes.finish(advertised, n)
 			report()
 			return nil
 		})
@@ -152,8 +160,9 @@ func pictureTargets(jacketURL string, gallery []string, dir string) []picture {
 }
 
 // fetchImage saves one picture, carrying the extension its bytes call for, and
-// returns its path and size. add reports each read as it lands.
-func fetchImage(ctx context.Context, client *http.Client, userAgent string, p picture, referer string, add func(n int64)) (string, int64, error) {
+// returns its path and size. onHeaders reports the advertised size, add reports
+// each read as it lands.
+func fetchImage(ctx context.Context, client *http.Client, userAgent string, p picture, referer string, onHeaders func(size int64), add func(n int64)) (string, int64, error) {
 	req, err := newMediaRequest(ctx, p.url, referer, userAgent)
 	if err != nil {
 		return "", 0, err
@@ -170,6 +179,10 @@ func fetchImage(ctx context.Context, client *http.Client, userAgent string, p pi
 
 	if resp.StatusCode != http.StatusOK {
 		return "", 0, util.BadStatus(p.url, resp)
+	}
+
+	if onHeaders != nil && resp.ContentLength > 0 && resp.ContentLength <= maxImageBytes {
+		onHeaders(resp.ContentLength)
 	}
 
 	// One byte past the cap, so a picture that overruns it is refused rather

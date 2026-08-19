@@ -120,9 +120,8 @@ func TestLineLeadsWithItsKindThenTheTitle(t *testing.T) {
 	}
 }
 
-// One line carries the jacket and the gallery, so it has to say both how many
-// pictures landed and how many bytes they came to.
-func TestUnitsLineCarriesBytesAndCount(t *testing.T) {
+// Image line carries discrete tally #/N, no percentage, and empty size column.
+func TestImageLineCarriesCountAndNoPercentage(t *testing.T) {
 	var buf bytes.Buffer
 	bs := newProgress(&buf, mpb.WithAutoRefresh())
 
@@ -132,25 +131,60 @@ func TestUnitsLineCarriesBytesAndCount(t *testing.T) {
 	waitOrFail(t, bs)
 
 	got := buf.String()
-	for _, want := range []string{"2.1 MiB / 7.0 MiB", "2/6"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("row = %q, want it to carry %q", got, want)
+	if !strings.Contains(got, "2/6") {
+		t.Errorf("image row = %q, want it to carry %q", got, "2/6")
+	}
+	if strings.Contains(got, "%") {
+		t.Errorf("image row = %q, want no percentage", got)
+	}
+	if strings.Contains(got, "MiB") {
+		t.Errorf("image row = %q, want no byte counters in image row", got)
+	}
+}
+
+// Chapter line carries discrete step count #/N and no percentage.
+func TestChapterLineCarriesCountAndNoPercentage(t *testing.T) {
+	var buf bytes.Buffer
+	bs := newProgress(&buf, mpb.WithAutoRefresh())
+
+	bs.StartCount(Line{Key: "c", Kind: KindChapter, Label: "ある夏の日"}, 5)
+	bs.Update("c", 2, 5)
+	waitOrFail(t, bs)
+
+	got := buf.String()
+	if !strings.Contains(got, "2/5") {
+		t.Errorf("chapter row = %q, want it to carry %q", got, "2/5")
+	}
+	if strings.Contains(got, "%") {
+		t.Errorf("chapter row = %q, want no percentage", got)
+	}
+}
+
+// Recording line carries percentage, bytes, and ETA.
+func TestRecordingLineCarriesPercentage(t *testing.T) {
+	var buf bytes.Buffer
+	bs := newProgress(&buf, mpb.WithAutoRefresh())
+
+	bs.Start(Line{Key: "r", Kind: KindRecording, Label: "ある夏の日"}, 1000)
+	bs.Update("r", 500, 1000)
+	waitOrFail(t, bs)
+
+	got := buf.String()
+	if !strings.Contains(got, "%") {
+		t.Errorf("recording row = %q, want it to carry %%", got)
+	}
+}
+
+// The counter shares the percentage's column, so a count that overran it would
+// push every column after it right and cost the label its width.
+func TestUnitsFitTheStatusColumn(t *testing.T) {
+	for _, count := range []int64{6, 30, 100, 999} {
+		if got := len(fmt.Sprintf("%d/%d", count, count)); got > statusCols {
+			t.Errorf("%d units take %d columns, over the %d the status field holds", count, got, statusCols)
 		}
 	}
 }
 
-// The units take the ETA's column rather than a new one, so the line ends the
-// same width as every other and an 80-column terminal still holds it.
-func TestUnitsFitTheETAColumn(t *testing.T) {
-	for _, count := range []int64{6, 30, 100} {
-		if got := len(fmt.Sprintf("%d/%d", count, count)); got > etaCols {
-			t.Errorf("%d units take %d columns, over the %d the ETA field holds", count, got, etaCols)
-		}
-	}
-}
-
-// A line opened by Start carries no unit figure. Setting one must be ignored
-// rather than panicking on a nil counter.
 func TestSetUnitsWithoutStartUnitsIsIgnored(t *testing.T) {
 	bs := NewProgress(io.Discard)
 	bs.Start(line("a.m4a"), 100)
@@ -218,6 +252,22 @@ func TestRateMeterReadsSteadySpeed(t *testing.T) {
 		if off := math.Abs(rate-want) / want; off > 0.01 {
 			t.Fatalf("sample %d: rate = %.0f B/s, want %.0f", i, rate, want)
 		}
+	}
+}
+
+// Readings that repeat inside the window are the redraw outrunning the bytes,
+// not a stall, so the rate has to hold rather than bleed off.
+func TestRateMeterHoldsBetweenRedraws(t *testing.T) {
+	var (
+		m   rateMeter
+		now = time.Now()
+	)
+	m.observe(now, 0)
+	moving := m.observe(now.Add(time.Second), 1<<20)
+
+	now = now.Add(time.Second + 100*time.Millisecond)
+	if got := m.observe(now, 1<<20); got != moving {
+		t.Fatalf("rate = %.0f B/s on a repeat reading, want it held at %.0f", got, moving)
 	}
 }
 

@@ -600,8 +600,6 @@ func fetchPictures(ctx context.Context, cmd *cobra.Command, d *downloader.Downlo
 		return ""
 	}
 
-	// The byte total is projected from the pictures already down, so it moves
-	// until the last one lands.
 	line := p.lines.line(downloader.KindImage, imagesName)
 	prog.StartUnits(line, int64(count))
 

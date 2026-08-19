@@ -50,7 +50,7 @@ func TestFetchImageStoresTheSourceBytes(t *testing.T) {
 
 	dir := t.TempDir()
 	p := picture{url: ts.URL + "/a.jpg", dir: dir, name: "01"}
-	path, n, err := fetchImage(context.Background(), ts.Client(), "test", p, ts.URL, nil)
+	path, n, err := fetchImage(context.Background(), ts.Client(), "test", p, ts.URL, nil, nil)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestFetchImageRefusesOversizeRatherThanTruncating(t *testing.T) {
 
 	dir := t.TempDir()
 	p := picture{url: ts.URL + "/big.jpg", dir: dir, name: "01"}
-	_, _, err := fetchImage(context.Background(), ts.Client(), "test", p, ts.URL, nil)
+	_, _, err := fetchImage(context.Background(), ts.Client(), "test", p, ts.URL, nil, nil)
 	if err == nil {
 		t.Fatal("oversize picture accepted, want an error")
 	}
@@ -224,8 +224,7 @@ func TestFetchPicturesFetchesInParallel(t *testing.T) {
 	}
 }
 
-// The line carries both figures, so progress has to report the pictures
-// finished alongside the bytes and the total they project to.
+// The line carries units and bytes for progress and ETA.
 func TestFetchPicturesReportsUnitsAndBytes(t *testing.T) {
 	const size = 4096
 	ts := pictureServer(t, size)
@@ -250,7 +249,6 @@ func TestFetchPicturesReportsUnitsAndBytes(t *testing.T) {
 	if want := int64(len(gallery) * size); lastBytes != want {
 		t.Errorf("finished at %d bytes, want %d", lastBytes, want)
 	}
-	// Every picture is down, so the projection is no longer a projection.
 	if lastTotal != lastBytes {
 		t.Errorf("total %d, want it exact at %d once the last landed", lastTotal, lastBytes)
 	}

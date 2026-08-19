@@ -87,6 +87,7 @@ func (d *Downloader) tagging(tags Tags, next int, muxer, chapMeta string) (input
 		// names the ID3 attached-picture frame goes by, not ours to rename.
 		opts = append(opts,
 			"-c:v", "mjpeg",
+			"-vf", `pad=max(iw\,ih):max(iw\,ih):(ow-iw)/2:(oh-ih)/2:color=black`,
 			"-disposition:v", "attached_pic",
 			"-metadata:s:v", "title=Album cover",
 			"-metadata:s:v", "comment=Cover (front)",

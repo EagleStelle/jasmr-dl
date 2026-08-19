@@ -225,7 +225,7 @@ func (d *Downloader) fetchSegments(ctx context.Context, job Job, segments []stri
 		g.Go(func() error {
 			if have := fileSize(paths[i]); have > 0 {
 				sizes.advance(have)
-				sizes.finish(have)
+				sizes.finish(0, have)
 				report()
 				return nil
 			}
@@ -240,7 +240,7 @@ func (d *Downloader) fetchSegments(ctx context.Context, job Job, segments []stri
 			if err != nil {
 				return fmt.Errorf("segment %d: %w", i, err)
 			}
-			sizes.finish(written)
+			sizes.finish(0, written)
 			report()
 			return nil
 		})
