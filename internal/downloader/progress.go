@@ -32,15 +32,16 @@ const sizeCols = 21
 // etaCols fits "ETA 12:34:56", the longest form printed.
 const etaCols = 12
 
-// percentCols fits the percentage and the column mpb pads it into.
-const percentCols = 5
+// statusCols holds the percentage or the counter, so the size column starts in
+// the same place on every line. "999/999" is 7 columns, wider than "100 %".
+const statusCols = 7
 
 // progressTag prefixes every progress line, matching [info] and [done].
 const progressTag = "[progress]"
 
 const (
 	// fixedCols is every column but the label.
-	fixedCols = len(progressTag) + kindCols + 1 + 1 + percentCols + 2 + sizeCols + 1 + etaCols
+	fixedCols = len(progressTag) + kindCols + 1 + 1 + statusCols + 1 + sizeCols + 1 + etaCols
 
 	minLabelCols = 14
 	maxLabelCols = 40
@@ -56,8 +57,8 @@ type Line struct {
 	Label string
 }
 
-// Progress renders one live line per file: percentage, bytes on disk over the
-// bytes expected, and the time left. Safe for concurrent use.
+// Progress renders one live line per file: percentage or counter, bytes on disk
+// over the bytes expected, and the time left. Safe for concurrent use.
 type Progress struct {
 	p     *mpb.Progress
 	mu    sync.Mutex
@@ -101,18 +102,18 @@ func labelCols(w io.Writer) int {
 // Start creates the line for l.Key, reusing one that exists. A non-positive
 // total means the size is not known yet; Update adopts the real one later.
 func (b *Progress) Start(l Line, total int64) {
-	b.start(l, total, byteCounters(), eta())
+	b.start(l, total, percentage(), byteCounters(), eta())
 }
 
+// StartCount opens a line for discrete steps, counting them where the
+// percentage goes and leaving the size column blank.
 func (b *Progress) StartCount(l Line, total int64) {
-	counters := decor.CountersNoUnit("%d / %d", decor.WC{W: sizeCols, C: decor.DindentRight})
-	b.start(l, total, counters, eta())
+	b.start(l, total, stepCounter(), emptySize(), eta())
 }
 
-// StartUnits opens a line measured in bytes that also carries how many of a set
-// have landed. count is how many there are; SetUnits moves the figure. The
-// units take the ETA's column: a total projected from what has finished moves,
-// and a time derived from a moving total is not worth printing.
+// StartUnits opens a line measured in bytes, for the ETA, that counts how many
+// of a set have landed where the percentage goes. count is how many there are;
+// SetUnits moves the figure.
 func (b *Progress) StartUnits(l Line, count int64) {
 	n := new(atomic.Int64)
 	b.mu.Lock()
@@ -123,7 +124,7 @@ func (b *Progress) StartUnits(l Line, count int64) {
 	}
 	b.mu.Unlock()
 
-	b.start(l, 0, byteCounters(), units(n, count))
+	b.start(l, 0, units(n, count), emptySize(), eta())
 }
 
 // SetUnits moves the unit figure on a line StartUnits opened.
@@ -137,22 +138,38 @@ func (b *Progress) SetUnits(key string, done int64) {
 	}
 }
 
+// percentage renders how far a line measured in bytes has come.
+func percentage() decor.Decorator {
+	return decor.Percentage(decor.WC{W: statusCols, C: decor.DindentRight})
+}
+
 func byteCounters() decor.Decorator {
 	return decor.CountersKibiByte("% .1f / % .1f", decor.WC{W: sizeCols, C: decor.DindentRight})
 }
 
-// units renders "done/count" where the ETA would go. It stands whether the line
-// finished or was cut short: how many landed is a fact either way, unlike the
-// time an aborted line had left.
+// units renders "done/count" in the shared status column.
 func units(n *atomic.Int64, count int64) decor.Decorator {
 	return decor.Any(func(decor.Statistics) string {
 		return fmt.Sprintf("%d/%d", n.Load(), count)
-	}, decor.WC{W: etaCols, C: decor.DindentRight})
+	}, decor.WC{W: statusCols, C: decor.DindentRight})
 }
 
-// start opens a line. counters fills the column after the percentage, trailer
-// the last one, so every line ends the same width whatever it puts there.
-func (b *Progress) start(l Line, total int64, counters, trailer decor.Decorator) {
+// stepCounter renders "current/total" in the shared status column.
+func stepCounter() decor.Decorator {
+	return decor.Any(func(s decor.Statistics) string {
+		return fmt.Sprintf("%d/%d", s.Current, s.Total)
+	}, decor.WC{W: statusCols, C: decor.DindentRight})
+}
+
+// emptySize leaves the size column blank so the ETA still aligns.
+func emptySize() decor.Decorator {
+	return decor.Name("", decor.WC{W: sizeCols})
+}
+
+// start opens a line. status fills the shared status column, counters the size
+// column and trailer the ETA one, so every line ends the same width whatever it
+// puts there.
+func (b *Progress) start(l Line, total int64, status, counters, trailer decor.Decorator) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -170,8 +187,8 @@ func (b *Progress) start(l Line, total int64, counters, trailer decor.Decorator)
 			decor.Name("["+l.Kind+"]", decor.WC{W: kindCols, C: decor.DindentRight}),
 			decor.Name(truncate(l.Label, b.labelCols), decor.WC{W: b.labelCols + 1, C: decor.DindentRight}),
 			decor.Name(" "), // the label column clips flush
-			decor.Percentage(decor.WC{W: percentCols}),
-			decor.Name("  "),
+			status,
+			decor.Name(" "),
 			counters,
 			decor.Name(" "),
 			trailer,
@@ -243,39 +260,50 @@ func eta() decor.Decorator {
 	}, decor.WC{W: etaCols, C: decor.DindentRight})
 }
 
-// rateMeter turns absolute progress readings into bytes per second. Samples
+// rateMeter turns absolute progress readings into units per second. Samples
 // decay over rateWindow, so a burst or a stall moves the figure without
 // throwing it; dividing by the weight they carry keeps the first seconds from
 // reading as a fraction of the real speed.
 type rateMeter struct {
-	sum    float64 // decayed sum of the samples
-	weight float64 // decayed weight those samples carry
-	last   time.Time
-	prev   int64
-	seen   bool
+	sum        float64 // decayed sum of the samples
+	weight     float64 // decayed weight those samples carry
+	lastSample time.Time
+	lastChange time.Time // when the reading last moved
+	prev       int64
+	seen       bool
 }
 
-// observe folds one reading into the rate and returns bytes per second.
+// observe folds one reading into the rate and returns units per second.
 func (m *rateMeter) observe(now time.Time, current int64) float64 {
 	if !m.seen {
-		m.seen, m.last, m.prev = true, now, current
+		m.seen = true
+		m.lastSample, m.lastChange, m.prev = now, now, current
 		return 0
 	}
 
-	dt := now.Sub(m.last).Seconds()
-	if dt <= 0 {
+	if current != m.prev {
+		dt := now.Sub(m.lastChange).Seconds()
+		delta := current - m.prev
+		if delta > 0 && dt > 0 {
+			decay := math.Exp(-dt / rateWindow.Seconds())
+			m.sum = decay*m.sum + (1-decay)*(float64(delta)/dt)
+			m.weight = decay*m.weight + (1 - decay)
+		}
+		m.lastChange, m.prev = now, current
+		m.lastSample = now
 		return m.rate()
 	}
 
-	delta := current - m.prev
-	if delta < 0 {
-		delta = 0 // a re-estimated total can walk a line backwards
+	// The reading repeated. Inside the window that is the redraw outrunning the
+	// bytes; past it the line has stalled and the rate has to bleed down.
+	if now.Sub(m.lastChange) > rateWindow {
+		dt := now.Sub(m.lastSample).Seconds()
+		if dt > 0 {
+			decay := math.Exp(-dt / rateWindow.Seconds())
+			m.sum *= decay
+			m.lastSample = now
+		}
 	}
-	m.last, m.prev = now, current
-
-	decay := math.Exp(-dt / rateWindow.Seconds())
-	m.sum = decay*m.sum + (1-decay)*(float64(delta)/dt)
-	m.weight = decay*m.weight + (1 - decay)
 	return m.rate()
 }
 
