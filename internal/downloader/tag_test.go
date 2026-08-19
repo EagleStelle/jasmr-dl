@@ -123,7 +123,7 @@ func TestPieceTagsTitleIsTheChapter(t *testing.T) {
 	}
 }
 
-// --no-tags must stay off, not acquire a title through the split.
+// --no-metadata must stay off, not acquire a title through the split.
 func TestPieceTagsStayEmptyWhenTaggingIsOff(t *testing.T) {
 	if got := pieceTags(Tags{}, "耳かき", 3, 12); got != (Tags{}) {
 		t.Errorf("pieceTags = %+v, want an empty Tags", got)

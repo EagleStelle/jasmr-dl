@@ -27,20 +27,20 @@ go install github.com/EagleStelle/jasmr-dl@latest
 jasmr-dl https://japaneseasmr.com/12345/
 ```
 
-Files land under the post's year and RJ code:
+Files land under the post's RJ code:
 
 ```
-2024/RJ123456/RJ123456_1.mp3
-2024/RJ123456/RJ123456_2.mp3
-2024/RJ123456/jacket.jpg
-2024/RJ123456/images/01.jpg
+RJ123456/RJ123456_1.mp3
+RJ123456/RJ123456_2.mp3
+RJ123456/jacket.jpg
+RJ123456/images/01.jpg
 ```
 
 A post that serves a chaptered stream is cut into its chapters instead:
 
 ```
-2024/RJ123456/01_はじめに.m4a
-2024/RJ123456/02_耳かき.m4a
+RJ123456/01_はじめに.m4a
+RJ123456/02_耳かき.m4a
 ```
 
 Go faster with more ranged requests in flight, and more files at once:
@@ -52,7 +52,7 @@ jasmr-dl https://japaneseasmr.com/12345/ -j 64 -N 8
 Audio only:
 
 ```
-jasmr-dl https://japaneseasmr.com/12345/ -J -I -T
+jasmr-dl https://japaneseasmr.com/12345/ -M -J -I
 ```
 
 `Ctrl+C` cancels. Exit status is non-zero only when every post fails.
@@ -115,7 +115,7 @@ jasmr-dl https://japaneseasmr.com/12345/ -P ./out -o "{rjcode}/{number}.{ext}"
 A field the post does not carry writes `Unknown`. `{number}`, `{chapter}`,
 `{track}`, `{tracktotal}` and `{ext}` belong to the filename, not a directory.
 
-The default is `{year}/{rjcode}/<{rjcode}_{number}.{ext}|{number}_{chapter}.{ext}>`,
+The default is `{rjcode}/<{rjcode}_{number}.{ext}|{number}_{chapter}.{ext}>`,
 written in the same divider syntax `-o` takes: the same directory either way, a
 leaf per shape.
 
@@ -182,7 +182,7 @@ The stream is cut into one file per chapter.
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `-o, --output` | `{year}/{rjcode}/<{rjcode}_{number}.{ext}\|{number}_{chapter}.{ext}>` | Template naming each file and the directories above it; `<A\|B>` uses `A` per track, `B` per chapter |
+| `-o, --output` | `{rjcode}/<{rjcode}_{number}.{ext}\|{number}_{chapter}.{ext}>` | Template naming each file and the directories above it; `<A\|B>` uses `A` per track, `B` per chapter |
 | `-P, --paths` | | Directory everything is written under |
 | `-a, --batch-file` | | File listing one URL per line, or `-` for standard input |
 | `-N, --concurrency` | `3` | Posts, and files within them, downloaded at once |
@@ -191,18 +191,48 @@ The stream is cut into one file per chapter.
 | `-c, --cookies` | | Path to a `cookies.txt` export, kept for later runs |
 | `--use-browser` | | Path to a browser executable that clears a Cloudflare challenge |
 | `--show-browser` | `false` | Show that browser instead of running it headless |
+| `-M, --no-metadata` | `false` | Do not write title, artist or album metadata |
 | `-J, --no-jacket` | `false` | Do not embed jacket art |
 | `-I, --no-images` | `false` | Do not save the rest of the post's gallery |
 | `-H, --no-chapters` | `false` | Do not use the track list: no chapters, no split |
 | `-S, --no-split` | `false` | Do not cut a chaptered stream into one file per chapter |
-| `-T, --no-tags` | `false` | Do not write title, artist or album metadata |
 | `-v, --verbose` | `false` | Debug logging on stderr |
+
+## Configuration
+
+Any flag can be set outside the command line. Settings are read in this order, each one overriding the ones below it:
+
+1. The command line
+2. Environment variables
+3. `jasmr-dl.conf` in the working directory
+4. `config` in the per-user config directory
+
+A config file holds one setting per line, named by its long flag without the leading dashes. Lines opening with `#` are remarks. A boolean may be written on its own. Quote a value to keep its surrounding spaces or a leading `#`.
+
+```
+# jasmr-dl.conf
+concurrency = 8
+connections = 64
+output = {circle}/{rjcode}/{number}. {chapter}.{ext}
+paths = D:\Audio
+no-images
+```
+
+The environment variable for a flag is its long name uppercased, with dashes as underscores and `JASMR_DL_` in front:
+
+```
+JASMR_DL_CONCURRENCY=8
+JASMR_DL_PATHS=/srv/audio
+JASMR_DL_NO_IMAGES=true
+```
+
+Setting `JASMR_DL_NO_CONFIG` to any value skips both files.
 
 ## Requirements
 
 `ffmpeg` and `ffprobe` are required for jacket art, tags, and posts that serve only the site's stream. Put both on `PATH`, or beside the `jasmr-dl` binary.
 
-Without them, use `-J -T -H` to download the audio untouched. Stream-only posts will not work.
+Without them, use `-M -J -H` to download the audio untouched. Stream-only posts will not work.
 
 ## Cloudflare
 

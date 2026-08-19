@@ -117,7 +117,7 @@ func (r *run) chaptersFor(album *scraper.Album) []scraper.Chapter {
 
 // tagsFor builds the metadata written into one file, n being its place in the post.
 func (r *run) tagsFor(album *scraper.Album, track scraper.Track, n int) downloader.Tags {
-	if r.cfg.NoTags {
+	if r.cfg.NoMetadata {
 		return downloader.Tags{}
 	}
 	return downloader.Tags{

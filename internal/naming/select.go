@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// Default puts every post under its year and RJ code, with a leaf per shape.
-const Default = "{year}/{rjcode}/<{rjcode}_{number}.{ext}|{number}_{chapter}.{ext}>"
+// Default puts every post under its RJ code, with a leaf per shape.
+const Default = "{rjcode}/<{rjcode}_{number}.{ext}|{number}_{chapter}.{ext}>"
 
 // One -o value may name a template for each shape a post takes: <A|B> uses A
 // per track and B per chapter, a branch of * keeping that side's default.

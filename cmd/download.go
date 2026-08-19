@@ -64,11 +64,11 @@ func config(cmd *cobra.Command, targets []string) (app.Config, error) {
 		Concurrency: opts.concurrency,
 		Connections: opts.connections,
 		Retries:     opts.retries,
+		NoMetadata:  opts.noMetadata,
 		NoJacket:    opts.noJacket,
 		NoImages:    opts.noImages,
 		NoChapters:  opts.noChapters,
 		NoSplit:     opts.noSplit,
-		NoTags:      opts.noTags,
 		Store:       store,
 		Challenge: app.ChallengeOptions{
 			Enabled:     true,

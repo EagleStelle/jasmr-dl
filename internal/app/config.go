@@ -58,11 +58,11 @@ type Config struct {
 	// Retries is retry attempts per ranged request. Zero means none.
 	Retries int
 
+	NoMetadata bool
 	NoJacket   bool
 	NoImages   bool
 	NoChapters bool
 	NoSplit    bool
-	NoTags     bool
 
 	// Store keeps what a solve earns and hands back an earlier run's. Nil keeps
 	// nothing.

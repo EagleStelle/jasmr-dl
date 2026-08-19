@@ -8,9 +8,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
-
-	"github.com/EagleStelle/jasmr-dl/internal/naming"
-	"github.com/EagleStelle/jasmr-dl/internal/session"
 )
 
 // version is the build revision. A release build replaces it via -ldflags -X,
@@ -44,11 +41,11 @@ type options struct {
 	cookieFile  string
 	browserPath string
 	showBrowser bool
+	noMetadata  bool
 	noJacket    bool
 	noImages    bool
 	noChapters  bool
 	noSplit     bool
-	noTags      bool
 	verbose     bool
 }
 
@@ -57,20 +54,6 @@ var opts options
 var rootCmd = &cobra.Command{
 	Use:     "jasmr-dl <url>...",
 	Version: resolveVersion(),
-	Short:   "Download audio from japaneseasmr.com posts, tagged and with jacket art",
-	Long: "Download audio from japaneseasmr.com posts, tagged and with jacket art.\n\n" +
-		"Several URLs may be given at once, and -a reads a list of them from a\n" +
-		"file. -N and -j hold across the whole run, however many posts it\n" +
-		"covers.\n\n" +
-		"Cookies and the User-Agent they were earned under are kept in\n" +
-		session.DefaultDir() + ", which " + session.DirEnv + " moves.\n\n" +
-		"Output template (-o):\n" +
-		"  directories  {title} {rjcode} {circle} {artist} {date} {year} {month} {day}\n" +
-		"  filename     all of the above, plus {number} {chapter} {track} {tracktotal} {ext}\n\n" +
-		"  <A|B> names a template per shape: A per track, B per chapter, and * on\n" +
-		"  either side keeps that side's default. Quote the whole template, since\n" +
-		"  < > | * are shell syntax.\n\n" +
-		"  default  " + naming.Default,
 	Example: "  jasmr-dl https://japaneseasmr.com/12345/\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ https://japaneseasmr.com/12346/\n" +
 		"  jasmr-dl -a urls.txt\n" +
@@ -79,9 +62,12 @@ var rootCmd = &cobra.Command{
 		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"C:/Audio/{year}/{title}/{rjcode}_{number}.{ext}\"\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"<*|{number}_{chapter} [{circle}].{ext}>\"\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -P ./out -o \"{rjcode}/{number}.{ext}\"\n" +
-		"  jasmr-dl https://japaneseasmr.com/12345/ -J -I -T\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ -M -J -I\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -c C:\\path\\cookies.txt",
 	Args: cobra.ArbitraryArgs,
+	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+		return applyConfig(cmd)
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 && opts.batchFile == "" {
 			return cmd.Help()
@@ -101,7 +87,12 @@ func Execute() {
 }
 
 func init() {
-	f := rootCmd.PersistentFlags()
+	registerFlags(rootCmd.PersistentFlags(), &opts)
+	// The set --help reads from is not the one the flags were registered on.
+	rootCmd.Flags().SortFlags = false
+}
+
+func registerFlags(f *pflag.FlagSet, opts *options) {
 	f.StringVarP(&opts.outputTmpl, "output", "o", "",
 		"template naming each file and the directories above it")
 	f.StringVarP(&opts.basePath, "paths", "P", "", "directory everything is written under")
@@ -112,12 +103,15 @@ func init() {
 	f.StringVarP(&opts.cookieFile, "cookies", "c", "", "path to a cookies.txt export, kept for later runs")
 	f.StringVar(&opts.browserPath, "use-browser", "", "path to a browser executable that clears a Cloudflare challenge")
 	f.BoolVar(&opts.showBrowser, "show-browser", false, "show that browser instead of running it headless")
+	f.BoolVarP(&opts.noMetadata, "no-metadata", "M", false, "do not write title, artist or album metadata")
 	f.BoolVarP(&opts.noJacket, "no-jacket", "J", false, "do not embed jacket art")
 	f.BoolVarP(&opts.noImages, "no-images", "I", false, "do not save the rest of the post's gallery")
 	f.BoolVarP(&opts.noChapters, "no-chapters", "H", false, "do not use the track list: no chapters, no split")
 	f.BoolVarP(&opts.noSplit, "no-split", "S", false, "do not cut a chaptered stream into one file per chapter")
-	f.BoolVarP(&opts.noTags, "no-tags", "T", false, "do not write title, artist or album metadata")
 	f.BoolVarP(&opts.verbose, "verbose", "v", false, "debug logging on stderr")
+
+	// --help lists flags as registered above, rather than alphabetically.
+	f.SortFlags = false
 
 	f.VisitAll(func(fl *pflag.Flag) { fl.Value = upperType{fl.Value} })
 }

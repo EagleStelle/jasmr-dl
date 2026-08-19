@@ -92,7 +92,7 @@ func TestParseRejectsBadTemplates(t *testing.T) {
 }
 
 func TestDefaultLayout(t *testing.T) {
-	tmpl, err := Parse("{year}/{rjcode}/{rjcode}_{number}.{ext}")
+	tmpl, err := Parse("{rjcode}/{rjcode}_{number}.{ext}")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,19 +100,19 @@ func TestDefaultLayout(t *testing.T) {
 	f := album()
 	f.Number, f.Total, f.Ext = 2, 3, "mp3"
 
-	if got, want := tmpl.Dir(f), filepath.Join("2024", "RJ123456"); got != want {
+	if got, want := tmpl.Dir(f), "RJ123456"; got != want {
 		t.Errorf("Dir = %q, want %q", got, want)
 	}
 	if got, want := tmpl.File(f), "RJ123456_2.mp3"; got != want {
 		t.Errorf("File = %q, want %q", got, want)
 	}
-	if got, want := tmpl.Path(f), filepath.Join("2024", "RJ123456", "RJ123456_2.mp3"); got != want {
+	if got, want := tmpl.Path(f), filepath.Join("RJ123456", "RJ123456_2.mp3"); got != want {
 		t.Errorf("Path = %q, want %q", got, want)
 	}
 }
 
 func TestDefaultSplitLayout(t *testing.T) {
-	tmpl, err := Parse("{year}/{rjcode}/{number}_{chapter}.{ext}")
+	tmpl, err := Parse("{rjcode}/{number}_{chapter}.{ext}")
 	if err != nil {
 		t.Fatal(err)
 	}
