@@ -16,6 +16,18 @@ import (
 	"time"
 )
 
+// pictureFetcher is a Downloader with nothing set but what saving a post's
+// pictures needs, carrying a real budget so the ceiling is the one a run holds.
+func pictureFetcher(ts *httptest.Server, dir string, onError func(error)) *Downloader {
+	return &Downloader{
+		Client:         ts.Client(),
+		UserAgent:      "test",
+		OutputDir:      dir,
+		Budget:         NewBudget(1, 1),
+		OnPictureError: onError,
+	}
+}
+
 // pngBody is a PNG signature with filler behind it: enough for the sniffer,
 // which reads no further than the first bytes.
 func pngBody(n int) []byte {
@@ -109,7 +121,8 @@ func TestFetchPicturesSavesTheJacketBesideTheGallery(t *testing.T) {
 
 	dir := t.TempDir()
 	gallery := []string{ts.URL + "/1.jpg", ts.URL + "/2.jpg", ts.URL + "/3.jpg"}
-	pics := FetchPictures(context.Background(), ts.Client(), "test", ts.URL+"/jacket.jpg", gallery, ts.URL, dir, nil, nil)
+	d := pictureFetcher(ts, dir, nil)
+	pics := d.FetchPictures(context.Background(), ts.URL+"/jacket.jpg", gallery, ts.URL, nil)
 
 	if got, want := pics.Jacket, filepath.Join(dir, jacketName+".png"); got != want {
 		t.Errorf("jacket at %q, want %q", got, want)
@@ -143,12 +156,12 @@ func TestFetchPicturesNumbersByPositionThroughAFailure(t *testing.T) {
 
 	dir := t.TempDir()
 	gallery := []string{ts.URL + "/1.jpg", ts.URL + "/2.jpg", ts.URL + "/3.jpg"}
-	pics := FetchPictures(context.Background(), ts.Client(), "test", "", gallery, ts.URL, dir, nil,
-		func(error) {
-			mu.Lock()
-			failures++
-			mu.Unlock()
-		})
+	d := pictureFetcher(ts, dir, func(error) {
+		mu.Lock()
+		failures++
+		mu.Unlock()
+	})
+	pics := d.FetchPictures(context.Background(), "", gallery, ts.URL, nil)
 
 	if failures != 1 {
 		t.Errorf("%d failures reported, want 1", failures)
@@ -190,9 +203,10 @@ func TestFetchPicturesFetchesInParallel(t *testing.T) {
 		gallery = append(gallery, fmt.Sprintf("%s/%d.jpg", ts.URL, i))
 	}
 
+	d := pictureFetcher(ts, t.TempDir(), nil)
 	done := make(chan Pictures, 1)
 	go func() {
-		done <- FetchPictures(context.Background(), ts.Client(), "test", "", gallery, ts.URL, t.TempDir(), nil, nil)
+		done <- d.FetchPictures(context.Background(), "", gallery, ts.URL, nil)
 	}()
 
 	for i := range n {
@@ -222,12 +236,13 @@ func TestFetchPicturesReportsUnitsAndBytes(t *testing.T) {
 	var lastDone int
 	var lastBytes, lastTotal int64
 
-	FetchPictures(context.Background(), ts.Client(), "test", "", gallery, ts.URL, t.TempDir(),
+	d := pictureFetcher(ts, t.TempDir(), nil)
+	d.FetchPictures(context.Background(), "", gallery, ts.URL,
 		func(done int, bytes, total int64) {
 			mu.Lock()
 			lastDone, lastBytes, lastTotal = done, bytes, total
 			mu.Unlock()
-		}, nil)
+		})
 
 	if lastDone != len(gallery) {
 		t.Errorf("finished at %d pictures, want %d", lastDone, len(gallery))

@@ -30,17 +30,6 @@ const (
 	minChunk = 4 << 20
 )
 
-// connections caps the requests in flight across the run.
-func (d *Downloader) connections() int {
-	if d.Connections < 1 {
-		return defaultConnections
-	}
-	if d.Connections > maxConnections {
-		return maxConnections
-	}
-	return d.Connections
-}
-
 func pieceCount(total int64) int {
 	return int((total + pieceSize - 1) / pieceSize)
 }
@@ -95,7 +84,7 @@ func (d *Downloader) chunked(ctx context.Context, res *Resolved, total int64, na
 
 	var next atomic.Int64
 	g, gctx := errgroup.WithContext(ctx)
-	for range min(d.connections(), n) {
+	for range min(d.Budget.connectionCount(), n) {
 		g.Go(func() error {
 			for {
 				i := int(next.Add(1) - 1)

@@ -36,6 +36,7 @@ func resolveVersion() string {
 var (
 	outputTmpl  string
 	basePath    string
+	batchFile   string
 	concurrency int
 	connections int
 	retries     int
@@ -51,10 +52,13 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:     "jasmr-dl <url>",
+	Use:     "jasmr-dl <url>...",
 	Version: resolveVersion(),
-	Short:   "Download audio from a japaneseasmr.com post, tagged and with jacket art",
-	Long: "Download audio from a japaneseasmr.com post, tagged and with jacket art.\n\n" +
+	Short:   "Download audio from japaneseasmr.com posts, tagged and with jacket art",
+	Long: "Download audio from japaneseasmr.com posts, tagged and with jacket art.\n\n" +
+		"Several URLs may be given at once, and -a reads a list of them from a\n" +
+		"file. -N and -j hold across the whole run, however many posts it\n" +
+		"covers.\n\n" +
 		"Output template (-o):\n" +
 		"  directories  {title} {rjcode} {circle} {artist} {date} {year} {month} {day}\n" +
 		"  filename     all of the above, plus {number} {chapter} {track} {tracktotal} {ext}\n\n" +
@@ -63,6 +67,8 @@ var rootCmd = &cobra.Command{
 		"  < > | * are shell syntax.\n\n" +
 		"  default  " + naming.Default,
 	Example: "  jasmr-dl https://japaneseasmr.com/12345/\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ https://japaneseasmr.com/12346/\n" +
+		"  jasmr-dl -a urls.txt\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -j 64 -N 8\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"{circle}/{rjcode}/{number}. {chapter}.{ext}\"\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"C:/Audio/{year}/{title}/{rjcode}_{number}.{ext}\"\n" +
@@ -70,9 +76,9 @@ var rootCmd = &cobra.Command{
 		"  jasmr-dl https://japaneseasmr.com/12345/ -P ./out -o \"{rjcode}/{number}.{ext}\"\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -J -I -T\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -c C:\\path\\cookies.txt",
-	Args: cobra.MaximumNArgs(1),
+	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if len(args) == 0 {
+		if len(args) == 0 && batchFile == "" {
 			return cmd.Help()
 		}
 		return runDownload(cmd, args)
@@ -94,8 +100,9 @@ func init() {
 	f.StringVarP(&outputTmpl, "output", "o", "",
 		"template naming each file and the directories above it")
 	f.StringVarP(&basePath, "paths", "P", "", "directory everything is written under")
-	f.IntVarP(&concurrency, "concurrency", "N", 3, "files downloaded at once")
-	f.IntVarP(&connections, "connections", "j", 32, "ranged requests in flight (max 128)")
+	f.StringVarP(&batchFile, "batch-file", "a", "", "path to a URL list, one per line, or - for stdin")
+	f.IntVarP(&concurrency, "concurrency", "N", 3, "posts, and files within them, downloaded at once")
+	f.IntVarP(&connections, "connections", "j", 32, "ranged requests in flight, across every post (max 128)")
 	f.IntVarP(&retries, "retries", "R", 4, "retry attempts per ranged request")
 	f.StringVarP(&cookieFile, "cookies", "c", "", "path to a cookies.txt export, saved for later runs")
 	f.StringVar(&browserPath, "use-browser", "", "path to a browser executable that clears a Cloudflare challenge")

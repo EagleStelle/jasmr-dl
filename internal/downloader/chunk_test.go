@@ -15,9 +15,12 @@ func TestConnectionsClampToTheCeiling(t *testing.T) {
 		{maxConnections, maxConnections},
 		{maxConnections + 1, maxConnections},
 	} {
-		if got := (&Downloader{Connections: tc.set}).connections(); got != tc.want {
-			t.Errorf("Connections=%d gave %d, want %d", tc.set, got, tc.want)
+		if got := NewBudget(1, tc.set).connectionCount(); got != tc.want {
+			t.Errorf("connections=%d gave %d, want %d", tc.set, got, tc.want)
 		}
+	}
+	if got := (Budget{}).connectionCount(); got != defaultConnections {
+		t.Errorf("no budget gave %d, want %d", got, defaultConnections)
 	}
 }
 

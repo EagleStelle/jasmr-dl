@@ -29,9 +29,10 @@ const (
 	// imagesDirName holds the rest of the gallery, which no file carries.
 	imagesDirName = "images"
 
-	// imageWorkers bounds the pictures in flight. They come off a different
-	// host from the audio, so the connection budget does not cover them; a
-	// gallery is a handful of small files, which this is plenty for.
+	// imageWorkers bounds the pictures in flight across a run, posts included.
+	// They come off a different host from the audio, so the connection ceiling
+	// does not cover them; a gallery is a handful of small files, which this is
+	// plenty for.
 	imageWorkers = 8
 )
 
@@ -60,12 +61,12 @@ type picture struct {
 }
 
 // FetchPictures saves the jacket beside the audio and the gallery under
-// images/, every picture in flight together. onProgress reports the pictures
-// finished, the bytes on disk and the total those project to. One that will not
-// come down goes to onError and is skipped, since pictures are not what the run
-// is for.
-func FetchPictures(ctx context.Context, client *http.Client, userAgent, jacketURL string, gallery []string, referer, dir string, onProgress func(done int, bytes, total int64), onError func(err error)) Pictures {
-	targets := pictureTargets(jacketURL, gallery, dir)
+// images/, every picture in flight together up to what the budget allows.
+// onProgress reports the pictures finished, the bytes on disk and the total
+// those project to. One that will not come down goes to OnPictureError and is
+// skipped, since pictures are not what the run is for.
+func (d *Downloader) FetchPictures(ctx context.Context, jacketURL string, gallery []string, referer string, onProgress func(done int, bytes, total int64)) Pictures {
+	targets := pictureTargets(jacketURL, gallery, d.OutputDir)
 	if len(targets) == 0 {
 		return Pictures{}
 	}
@@ -82,12 +83,16 @@ func FetchPictures(ctx context.Context, client *http.Client, userAgent, jacketUR
 
 	paths := make([]string, len(targets))
 	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(imageWorkers)
 	for i, p := range targets {
 		g.Go(func() error {
+			if err := d.Budget.pictures.enter(gctx); err != nil {
+				return err
+			}
+			defer d.Budget.pictures.leave()
+
 			// got is this goroutine's alone, so the rollback needs no lock.
 			var got int64
-			path, n, err := fetchImage(gctx, client, userAgent, p, referer, func(add int64) {
+			path, n, err := fetchImage(gctx, d.Client, d.UserAgent, p, referer, func(add int64) {
 				got += add
 				sizes.advance(add)
 				report()
@@ -102,8 +107,8 @@ func FetchPictures(ctx context.Context, client *http.Client, userAgent, jacketUR
 				if gctx.Err() != nil {
 					return gctx.Err()
 				}
-				if onError != nil {
-					onError(err)
+				if d.OnPictureError != nil {
+					d.OnPictureError(err)
 				}
 				return nil
 			}

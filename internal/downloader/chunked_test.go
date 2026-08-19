@@ -61,11 +61,11 @@ func newChunkTest(t *testing.T, srv *rangeServer) (*Downloader, string, string) 
 
 	dir := t.TempDir()
 	d := &Downloader{
-		Client:      ts.Client(),
-		UserAgent:   "test",
-		OutputDir:   dir,
-		Connections: 8,
-		Retries:     4,
+		Client:    ts.Client(),
+		UserAgent: "test",
+		OutputDir: dir,
+		Budget:    NewBudget(1, 8),
+		Retries:   4,
 	}
 	return d, ts.URL + "/a.mp3", dir
 }
@@ -193,7 +193,7 @@ func TestChunkedResumesFromTheStateFile(t *testing.T) {
 	srv := &rangeServer{body: body}
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
-	d := &Downloader{Client: ts.Client(), UserAgent: "test", OutputDir: dir, Connections: 8}
+	d := &Downloader{Client: ts.Client(), UserAgent: "test", OutputDir: dir, Budget: NewBudget(1, 8)}
 
 	got, err := d.chunked(context.Background(), &Resolved{URL: ts.URL + "/a.mp3"}, total, "a.mp3", final, part)
 	if err != nil {
@@ -219,7 +219,7 @@ func TestChunkedReportsAnIgnoredRange(t *testing.T) {
 	defer ts.Close()
 
 	dir := t.TempDir()
-	d := &Downloader{Client: ts.Client(), UserAgent: "test", OutputDir: dir, Connections: 4}
+	d := &Downloader{Client: ts.Client(), UserAgent: "test", OutputDir: dir, Budget: NewBudget(1, 4)}
 	final := filepath.Join(dir, "a.mp3")
 
 	_, err := d.chunked(context.Background(), &Resolved{URL: ts.URL + "/a.mp3"}, int64(len(body)), "a.mp3", final, final+".part")

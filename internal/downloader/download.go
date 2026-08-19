@@ -14,8 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/sync/semaphore"
-
 	"github.com/EagleStelle/jasmr-dl/internal/naming"
 	"github.com/EagleStelle/jasmr-dl/internal/scraper"
 	"github.com/EagleStelle/jasmr-dl/internal/util"
@@ -61,11 +59,9 @@ type Downloader struct {
 	// embedding the chapters into a single file.
 	Split bool
 
-	// Connections caps the requests in flight across the run, which is what
-	// sets throughput. Zero means defaultConnections.
-	Connections int
-
-	budget *semaphore.Weighted
+	// Budget is what this download shares with every other one in the run,
+	// posts included. Its zero value is no ceiling at all.
+	Budget Budget
 
 	// OnStart opens a line; total is 0 when the size is not known yet, which
 	// is every HLS job, since a playlist gives no byte total up front.
@@ -74,6 +70,10 @@ type Downloader struct {
 
 	// OnJacketError reports art that could not be attached; the audio is fine.
 	OnJacketError func(name string, err error)
+
+	// OnPictureError reports a picture that would not come down; a post's art
+	// is not what the run is for.
+	OnPictureError func(err error)
 
 	// OnChapterDropped reports a chapter the stream ends before, whose file or
 	// marker is never written.
@@ -271,16 +271,11 @@ func (d *Downloader) finished(ctx context.Context, final string, advertised int6
 }
 
 func (d *Downloader) acquire(ctx context.Context) error {
-	if d.budget == nil {
-		return nil
-	}
-	return d.budget.Acquire(ctx, 1)
+	return d.Budget.connections.enter(ctx)
 }
 
 func (d *Downloader) release() {
-	if d.budget != nil {
-		d.budget.Release(1)
-	}
+	d.Budget.connections.leave()
 }
 
 func (d *Downloader) rangedGet(ctx context.Context, res *Resolved, from int64) (*http.Response, error) {
