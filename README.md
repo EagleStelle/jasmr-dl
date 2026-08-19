@@ -90,7 +90,8 @@ written in the same divider syntax `-o` takes: the same directory either way, a
 leaf per shape.
 
 Jacket art and the gallery follow the audio: `jacket.jpg` beside it, the rest
-under `images/`.
+under `images/`. They come down together, on one progress line that counts both
+the pictures and their bytes.
 
 ### Divider
 

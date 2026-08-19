@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/EagleStelle/jasmr-dl/internal/util"
 )
 
@@ -26,6 +28,11 @@ const (
 
 	// imagesDirName holds the rest of the gallery, which no file carries.
 	imagesDirName = "images"
+
+	// imageWorkers bounds the pictures in flight. They come off a different
+	// host from the audio, so the connection budget does not cover them; a
+	// gallery is a handful of small files, which this is plenty for.
+	imageWorkers = 8
 )
 
 // Extensions whose muxer can carry art and chapters.
@@ -35,47 +42,116 @@ var jacketMuxers = map[string]string{
 	".flac": "flac",
 }
 
-// FetchJacket saves album art into dir as the jacket and returns its path.
-// onProgress reports bytes read against the length the host declared.
-func FetchJacket(ctx context.Context, client *http.Client, userAgent, jacketURL, referer, dir string, onProgress func(done, total int64)) (string, error) {
-	return fetchImage(ctx, client, userAgent, jacketURL, referer, dir, jacketName, onProgress)
+// Pictures is what a post carries beside its audio.
+type Pictures struct {
+	// Jacket is the art the audio embeds, empty where none came down.
+	Jacket string
+
+	// Gallery is everything else, in page order.
+	Gallery []string
 }
 
-// FetchImages saves urls into an images subfolder of dir, numbered in page
-// order, and returns the paths written. A picture that will not come down goes
-// to onError and is skipped, since the gallery is not what the run is for.
-func FetchImages(ctx context.Context, client *http.Client, userAgent string, urls []string, referer, dir string, onProgress func(done, total int), onError func(err error)) []string {
-	dir = filepath.Join(dir, imagesDirName)
+// picture is one image to save: where it comes from and where it lands.
+type picture struct {
+	url    string
+	dir    string
+	name   string
+	jacket bool
+}
 
-	var paths []string
-	for i, u := range urls {
-		// Numbered by position, not by how many landed, so one picture
-		// failing does not shift the names of the pictures after it.
-		path, err := fetchImage(ctx, client, userAgent, u, referer, dir, fmt.Sprintf("%02d", i+1), nil)
-		if err != nil {
-			if onError != nil {
-				onError(err)
-			}
-			// A cancelled run would otherwise report every picture left.
-			if ctx.Err() != nil {
-				break
-			}
-			continue
-		}
-		paths = append(paths, path)
+// FetchPictures saves the jacket beside the audio and the gallery under
+// images/, every picture in flight together. onProgress reports the pictures
+// finished, the bytes on disk and the total those project to. One that will not
+// come down goes to onError and is skipped, since pictures are not what the run
+// is for.
+func FetchPictures(ctx context.Context, client *http.Client, userAgent, jacketURL string, gallery []string, referer, dir string, onProgress func(done int, bytes, total int64), onError func(err error)) Pictures {
+	targets := pictureTargets(jacketURL, gallery, dir)
+	if len(targets) == 0 {
+		return Pictures{}
+	}
+
+	sizes := &sizeTally{count: int64(len(targets))}
+	report := func() {
 		if onProgress != nil {
-			onProgress(len(paths), len(urls))
+			units, bytes, total := sizes.stat()
+			onProgress(int(units), bytes, total)
 		}
 	}
-	return paths
+
+	report()
+
+	paths := make([]string, len(targets))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(imageWorkers)
+	for i, p := range targets {
+		g.Go(func() error {
+			// got is this goroutine's alone, so the rollback needs no lock.
+			var got int64
+			path, n, err := fetchImage(gctx, client, userAgent, p, referer, func(add int64) {
+				got += add
+				sizes.advance(add)
+				report()
+			})
+			if err != nil {
+				// Nothing was written, so those bytes are not on disk.
+				if got > 0 {
+					sizes.advance(-got)
+					report()
+				}
+				// A cancelled run would otherwise report every picture left.
+				if gctx.Err() != nil {
+					return gctx.Err()
+				}
+				if onError != nil {
+					onError(err)
+				}
+				return nil
+			}
+			paths[i] = path
+			sizes.finish(n)
+			report()
+			return nil
+		})
+	}
+	// A picture failing is not the run's problem; the paths say what landed.
+	_ = g.Wait()
+
+	var out Pictures
+	for i, p := range targets {
+		switch {
+		case paths[i] == "":
+		case p.jacket:
+			out.Jacket = paths[i]
+		default:
+			out.Gallery = append(out.Gallery, paths[i])
+		}
+	}
+	return out
 }
 
-// fetchImage saves one picture into dir under name, carrying the extension its
-// bytes call for. onProgress may be nil.
-func fetchImage(ctx context.Context, client *http.Client, userAgent, imageURL, referer, dir, name string, onProgress func(done, total int64)) (string, error) {
-	req, err := newMediaRequest(ctx, imageURL, referer, userAgent)
+// pictureTargets names every picture a post opens. The jacket leads, so a run
+// that saves nothing else still has its art.
+func pictureTargets(jacketURL string, gallery []string, dir string) []picture {
+	var targets []picture
+	if jacketURL != "" {
+		targets = append(targets, picture{url: jacketURL, dir: dir, name: jacketName, jacket: true})
+	}
+
+	imagesDir := filepath.Join(dir, imagesDirName)
+	for i, u := range gallery {
+		// Numbered by position, not by how many landed, so one picture
+		// failing does not shift the names of the pictures after it.
+		targets = append(targets, picture{url: u, dir: imagesDir, name: fmt.Sprintf("%02d", i+1)})
+	}
+	return targets
+}
+
+// fetchImage saves one picture, carrying the extension its bytes call for, and
+// returns its path and size. add reports each read as it lands.
+func fetchImage(ctx context.Context, client *http.Client, userAgent string, p picture, referer string, add func(n int64)) (string, int64, error) {
+	req, err := newMediaRequest(ctx, p.url, referer, userAgent)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	// Art is an image, not the audio the shared headers ask for.
 	req.Header.Set("Accept", "image/jpeg,image/png,image/webp,image/*;q=0.8")
@@ -83,59 +159,56 @@ func fetchImage(ctx context.Context, client *http.Client, userAgent, imageURL, r
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", util.BadStatus(imageURL, resp)
+		return "", 0, util.BadStatus(p.url, resp)
 	}
 
 	// One byte past the cap, so a picture that overruns it is refused rather
 	// than written short: a truncated file still sniffs as an image, so nothing
 	// downstream would ever notice the missing half.
 	var body io.Reader = io.LimitReader(resp.Body, maxImageBytes+1)
-	if onProgress != nil {
-		body = &countingReader{r: body, total: resp.ContentLength, report: onProgress}
+	if add != nil {
+		body = &countingReader{r: body, add: add}
 	}
 
 	data, err := io.ReadAll(body)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if len(data) > maxImageBytes {
-		return "", fmt.Errorf("%q is larger than the %d MiB an image may be", imageURL, maxImageBytes>>20)
+		return "", 0, fmt.Errorf("%q is larger than the %d MiB an image may be", p.url, maxImageBytes>>20)
 	}
 	// This CDN serves WebP from a .jpg URL, declaring image/jpeg.
 	ext := imageExt(data)
 	if ext == "" {
-		return "", fmt.Errorf("%q is not an image this tool recognizes", imageURL)
+		return "", 0, fmt.Errorf("%q is not an image this tool recognizes", p.url)
 	}
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+	if err := os.MkdirAll(p.dir, 0o755); err != nil {
+		return "", 0, err
 	}
-	path := filepath.Join(dir, name+ext)
+	path := filepath.Join(p.dir, p.name+ext)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return path, nil
+	return path, int64(len(data)), nil
 }
 
-// countingReader reports how far through a body a read has got. total is what
-// the host declared, -1 where it declared nothing.
+// countingReader reports each read as it lands, so a set of pictures can be
+// counted while they are still coming down.
 type countingReader struct {
-	r      io.Reader
-	total  int64
-	done   int64
-	report func(done, total int64)
+	r   io.Reader
+	add func(n int64)
 }
 
 func (c *countingReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
 	if n > 0 {
-		c.done += int64(n)
-		c.report(c.done, c.total)
+		c.add(int64(n))
 	}
 	return n, err
 }

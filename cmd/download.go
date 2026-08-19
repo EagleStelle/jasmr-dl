@@ -35,7 +35,6 @@ const (
 	genre = "ASMR"
 
 	// The rows a post opens beside its recordings, one of each.
-	jacketName   = "jacket"
 	imagesName   = "images"
 	chaptersName = "chapters"
 )
@@ -141,8 +140,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	prog := downloader.NewProgress(cmd.OutOrStdout())
 	lines := linesFor(album)
 
-	jacketPath := fetchJacket(ctx, cmd, &sess, album, dir, prog, lines)
-	fetchImages(ctx, cmd, &sess, album, dir, prog, lines)
+	pics := fetchPictures(ctx, cmd, &sess, album, dir, prog, lines)
 
 	d := &downloader.Downloader{
 		Client:        sess.client,
@@ -151,7 +149,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		Template:      tmpl,
 		Connections:   connections,
 		Retries:       retries,
-		JacketPath:    jacketPath,
+		JacketPath:    pics.Jacket,
 		Chapters:      chapters,
 		Split:         split,
 		OnJacketError: func(name string, err error) { cmd.PrintErrf("[warn] %s: %v\n", name, err) },
@@ -475,25 +473,54 @@ func chaptersFor(cmd *cobra.Command, album *scraper.Album) []scraper.Chapter {
 	return album.Chapters
 }
 
-// fetchJacket is best-effort: missing art must not stop a download. Its line
-// opens at an unknown total, which the first bytes read replace with the real
-// one.
-func fetchJacket(ctx context.Context, cmd *cobra.Command, s *session, album *scraper.Album, dir string, prog *downloader.Progress, lines postLines) string {
-	if noJacket || album.JacketURL == "" {
-		return ""
+// fetchPictures saves the jacket and the gallery together, on one line and in
+// parallel. Best-effort: missing art must not stop a download.
+func fetchPictures(ctx context.Context, cmd *cobra.Command, s *session, album *scraper.Album, dir string, prog *downloader.Progress, lines postLines) downloader.Pictures {
+	jacketURL, gallery := pictureURLs(album)
+	count := len(gallery)
+	if jacketURL != "" {
+		count++
+	}
+	if count == 0 {
+		return downloader.Pictures{}
 	}
 
-	line := lines.line(downloader.KindJacket, jacketName)
-	prog.Start(line, 0)
+	// The byte total is projected from the pictures already down, so it moves
+	// until the last one lands.
+	line := lines.line(downloader.KindImage, imagesName)
+	prog.StartUnits(line, int64(count))
 
-	path, err := downloader.FetchJacket(ctx, s.client, s.userAgent, album.JacketURL, album.PageURL, dir,
-		func(done, total int64) { prog.Update(line.Key, done, total) })
-	if err != nil {
-		cmd.PrintErrf("[warn] no jacket art: %v\n", err)
-		return ""
+	pics := downloader.FetchPictures(ctx, s.client, s.userAgent, jacketURL, gallery, album.PageURL, dir,
+		func(done int, bytes, total int64) {
+			prog.SetUnits(line.Key, int64(done))
+			prog.Update(line.Key, bytes, total)
+		},
+		func(err error) { cmd.PrintErrf("[warn] picture not saved: %v\n", err) })
+
+	debugf(cmd, "jacket: %s", orNone(pics.Jacket))
+	debugf(cmd, "gallery: %d saved", len(pics.Gallery))
+	return pics
+}
+
+// pictureURLs splits a post's pictures into the jacket the audio embeds and the
+// gallery behind it, dropping whatever the flags turn off.
+func pictureURLs(album *scraper.Album) (jacket string, gallery []string) {
+	if !noJacket {
+		jacket = album.JacketURL
 	}
-	debugf(cmd, "jacket saved to %s", path)
-	return path
+	if noImages {
+		return jacket, nil
+	}
+
+	for _, u := range album.ImageURLs {
+		// The jacket already sits beside the audio. Dropping it here rather
+		// than counting on it being first keeps the numbering the same on a
+		// post that opens its gallery with something else.
+		if u != album.JacketURL {
+			gallery = append(gallery, u)
+		}
+	}
+	return jacket, gallery
 }
 
 // postLines names one post's progress rows, all of them titled alike and told
@@ -526,34 +553,6 @@ func progressLabel(album *scraper.Album) string {
 		return album.RJCode
 	}
 	return album.PageURL
-}
-
-// fetchImages saves the rest of the post's gallery beside the jacket. Best
-// effort, like the jacket: pictures are not what the run is for.
-func fetchImages(ctx context.Context, cmd *cobra.Command, s *session, album *scraper.Album, dir string, prog *downloader.Progress, lines postLines) {
-	if noImages {
-		return
-	}
-
-	var urls []string
-	for _, u := range album.ImageURLs {
-		// The jacket already sits beside the audio. Dropping it here rather
-		// than counting on it being first keeps the numbering the same on a
-		// post that opens its gallery with something else.
-		if u != album.JacketURL {
-			urls = append(urls, u)
-		}
-	}
-	if len(urls) == 0 {
-		return
-	}
-
-	key := lines.key(downloader.KindImage, imagesName)
-	prog.StartCount(lines.line(downloader.KindImage, imagesName), int64(len(urls)))
-	paths := downloader.FetchImages(ctx, s.client, s.userAgent, urls, album.PageURL, dir,
-		func(done, total int) { prog.Update(key, int64(done), int64(total)) },
-		func(err error) { cmd.PrintErrf("[warn] image not saved: %v\n", err) })
-	debugf(cmd, "gallery: %d saved", len(paths))
 }
 
 // reportSource names what the post serves its audio as.

@@ -12,7 +12,7 @@ import (
 func TestPostLinesKeepsAKindApartFromATrackOfTheSameName(t *testing.T) {
 	lines := linesFor(&scraper.Album{PageURL: "https://japaneseasmr.com/12345/", Title: "ある夏の日"})
 
-	for _, name := range []string{jacketName, imagesName, chaptersName} {
+	for _, name := range []string{imagesName, chaptersName} {
 		if lines.key(downloader.KindRecording, name) == lines.key(downloader.KindImage, name) {
 			t.Errorf("a recording named %q shares the gallery's key", name)
 		}

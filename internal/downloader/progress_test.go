@@ -2,6 +2,7 @@ package downloader
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"math"
 	"strings"
@@ -117,6 +118,47 @@ func TestLineLeadsWithItsKindThenTheTitle(t *testing.T) {
 			t.Errorf("%s row = %q, want it to carry %q", tc.kind, got, tc.want)
 		}
 	}
+}
+
+// One line carries the jacket and the gallery, so it has to say both how many
+// pictures landed and how many bytes they came to.
+func TestUnitsLineCarriesBytesAndCount(t *testing.T) {
+	var buf bytes.Buffer
+	bs := newProgress(&buf, mpb.WithAutoRefresh())
+
+	bs.StartUnits(Line{Key: "i", Kind: KindImage, Label: "ある夏の日"}, 6)
+	bs.SetUnits("i", 2)
+	bs.Update("i", 2202009, 7340032)
+	waitOrFail(t, bs)
+
+	got := buf.String()
+	for _, want := range []string{"2.1 MiB / 7.0 MiB", "2/6"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("row = %q, want it to carry %q", got, want)
+		}
+	}
+}
+
+// The units take the ETA's column rather than a new one, so the line ends the
+// same width as every other and an 80-column terminal still holds it.
+func TestUnitsFitTheETAColumn(t *testing.T) {
+	for _, count := range []int64{6, 30, 100} {
+		if got := len(fmt.Sprintf("%d/%d", count, count)); got > etaCols {
+			t.Errorf("%d units take %d columns, over the %d the ETA field holds", count, got, etaCols)
+		}
+	}
+}
+
+// A line opened by Start carries no unit figure. Setting one must be ignored
+// rather than panicking on a nil counter.
+func TestSetUnitsWithoutStartUnitsIsIgnored(t *testing.T) {
+	bs := NewProgress(io.Discard)
+	bs.Start(line("a.m4a"), 100)
+	bs.SetUnits("a.m4a", 3)
+	bs.SetUnits("ghost", 3)
+
+	bs.Update("a.m4a", 100, 100)
+	waitOrFail(t, bs)
 }
 
 func TestKindColumnFitsEveryKind(t *testing.T) {
