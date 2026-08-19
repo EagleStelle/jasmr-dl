@@ -1,6 +1,7 @@
-package cmd
+package app
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/EagleStelle/jasmr-dl/internal/naming"
@@ -15,6 +16,29 @@ func fields(n, total int) naming.Fields {
 		Ext:     "mp3",
 		Number:  n,
 		Total:   total,
+	}
+}
+
+func TestUnderBasePath(t *testing.T) {
+	if got, want := underBasePath("", "2024"), "2024"; got != want {
+		t.Errorf("without a base: %q, want %q", got, want)
+	}
+
+	base := filepath.Join("out", "audio")
+	if got, want := underBasePath(base, "2024"), filepath.Join(base, "2024"); got != want {
+		t.Errorf("with a base: %q, want %q", got, want)
+	}
+}
+
+func TestUnderBasePathLeavesARootedTemplate(t *testing.T) {
+	for _, dir := range []string{
+		string(filepath.Separator) + filepath.Join("srv", "audio"),
+		"C:" + string(filepath.Separator) + "Audio",
+		"C:",
+	} {
+		if got := underBasePath("out", dir); got != dir {
+			t.Errorf("underBasePath(%q) = %q, want it untouched", dir, got)
+		}
 	}
 }
 
@@ -56,8 +80,6 @@ func TestTemplateForDividesOnTheGroup(t *testing.T) {
 	}
 }
 
-// A branch of * leaves that side alone, so one custom template does not force
-// the other to be written out.
 func TestTemplateForKeepsAStarBranchDefault(t *testing.T) {
 	tmpl, err := templateFor("<*|{number}. {chapter}.{ext}>", false, 3)
 	if err != nil {
@@ -68,8 +90,7 @@ func TestTemplateForKeepsAStarBranchDefault(t *testing.T) {
 	}
 }
 
-// A -o naming no counter still writes every file of a post to its own name:
-// leading where each file is a chapter, trailing where each is a track.
+// A -o naming no counter still writes every file of a post to its own name.
 func TestTemplateForNumbersWhatTheTemplateDoesNot(t *testing.T) {
 	for _, tc := range []struct {
 		split bool
@@ -90,8 +111,6 @@ func TestTemplateForNumbersWhatTheTemplateDoesNot(t *testing.T) {
 	}
 }
 
-// A post of one file has nothing to count, so a template naming a counter
-// writes without it.
 func TestTemplateForDropsTheNumberOnASingleFile(t *testing.T) {
 	for _, tc := range []struct {
 		given string
@@ -125,5 +144,13 @@ func TestTemplateForRejectsABadTemplate(t *testing.T) {
 				t.Errorf("templateFor(%q, split=%v) succeeded, want an error", given, split)
 			}
 		}
+	}
+}
+
+// A bad template is settled before anything is fetched.
+func TestConfigRejectsABadTemplate(t *testing.T) {
+	cfg := Config{Targets: []string{"https://japaneseasmr.com/12345/"}, Template: "{nope}.{ext}"}
+	if _, err := cfg.prepared(); err == nil {
+		t.Error("prepared accepted a bad template, want an error")
 	}
 }

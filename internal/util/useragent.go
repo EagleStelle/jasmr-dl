@@ -16,12 +16,9 @@ const fallbackMajor = "151"
 
 var chromeVersion = regexp.MustCompile(`Chrome/(\d+)`)
 
-// UserAgent is the User-Agent every request sends, read from the browser
-// installed on this machine.
-//
-// Cloudflare binds cf_clearance to the User-Agent that solved the challenge, so
-// a pinned string silently stops matching the moment the browser updates and
-// every exported cookie is refused. Detecting it keeps the two in step.
+// UserAgent is the fallback User-Agent, read from the browser installed on this
+// machine. A run carries its own, and a clearance brings the one it was earned
+// under; either wins over this.
 var UserAgent = sync.OnceValue(func() string {
 	if ua := detectUserAgent(); ua != "" {
 		return ua

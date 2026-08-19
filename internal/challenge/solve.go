@@ -36,12 +36,18 @@ const (
 	clearanceCookie = "cf_clearance"
 )
 
+// ContainerArgs are the flags Chrome needs inside a container. --no-sandbox
+// drops a real security boundary, so a caller opts in rather than getting it.
+var ContainerArgs = []string{"--no-sandbox", "--disable-dev-shm-usage"}
+
 // Options configures one solve.
 type Options struct {
 	// BrowserPath names the browser to drive. Empty means find one.
 	BrowserPath string
-	// ProfileDir is the browser profile to keep, so trust accumulates across runs.
+	// ProfileDir keeps a profile between runs. Empty means a throwaway one.
 	ProfileDir string
+	// Args are extra browser flags. See ContainerArgs.
+	Args []string
 	// Visible shows the window instead of running headless.
 	Visible bool
 	// Timeout bounds the wait. Zero means DefaultTimeout.
@@ -91,10 +97,11 @@ func Solve(ctx context.Context, pageURL string, o Options) (*Result, error) {
 	}
 	o.logf("user-agent: %s", userAgent)
 
-	profileDir, err := profile(o.ProfileDir)
+	profileDir, cleanup, err := profile(o.ProfileDir)
 	if err != nil {
 		return nil, err
 	}
+	defer cleanup()
 
 	started, cancel := context.WithTimeout(ctx, launchTimeout)
 	b, err := launch(started, exe, o, userAgent, profileDir)
@@ -237,21 +244,26 @@ func hasClearance(cookies []downloader.Cookie, host string) bool {
 	return false
 }
 
-// profile prepares the profile directory and names it absolutely: given a
-// relative --user-data-dir, Chrome exits at once, silently.
-func profile(dir string) (string, error) {
+// profile names the profile directory absolutely: given a relative
+// --user-data-dir, Chrome exits at once, silently. An empty dir gets a
+// throwaway the returned function removes.
+func profile(dir string) (string, func(), error) {
 	if dir == "" {
-		return "", fmt.Errorf("no browser profile directory given")
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("create browser profile directory: %w", err)
+		tmp, err := os.MkdirTemp("", "jasmr-profile-")
+		if err != nil {
+			return "", nil, fmt.Errorf("create browser profile directory: %w", err)
+		}
+		return tmp, func() { os.RemoveAll(tmp) }, nil
 	}
 
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", nil, fmt.Errorf("create browser profile directory: %w", err)
+	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return "", fmt.Errorf("resolve browser profile directory: %w", err)
+		return "", nil, fmt.Errorf("resolve browser profile directory: %w", err)
 	}
-	return abs, nil
+	return abs, func() {}, nil
 }
 
 func hostOf(pageURL string) (string, error) {

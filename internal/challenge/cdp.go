@@ -81,6 +81,8 @@ func browserArgs(o Options, profileDir, userAgent string) []string {
 	if !o.Visible {
 		args = append(args, "--headless=new")
 	}
+	args = append(args, o.Args...) // last, so a caller's flag wins
+
 	// about:blank keeps the new tab page from reaching out on its own.
 	return append(args, "about:blank")
 }

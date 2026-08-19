@@ -1,4 +1,4 @@
-package cmd
+package app
 
 import (
 	"testing"
@@ -7,8 +7,7 @@ import (
 	"github.com/EagleStelle/jasmr-dl/internal/scraper"
 )
 
-// A post can hold a track named after one of the rows opened beside it. Kind
-// scopes the key, so the two never drive the same line.
+// A post can hold a track named after one of the rows opened beside it.
 func TestPostLinesKeepsAKindApartFromATrackOfTheSameName(t *testing.T) {
 	lines := linesFor(&scraper.Album{PageURL: "https://japaneseasmr.com/12345/", Title: "ある夏の日"})
 
@@ -19,7 +18,6 @@ func TestPostLinesKeepsAKindApartFromATrackOfTheSameName(t *testing.T) {
 	}
 }
 
-// Every row of a post is titled alike, whatever the post names itself by.
 func TestProgressLabelFallsBackToWhatThePostHas(t *testing.T) {
 	for _, tc := range []struct {
 		album scraper.Album

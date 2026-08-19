@@ -188,7 +188,7 @@ The stream is cut into one file per chapter.
 | `-N, --concurrency` | `3` | Posts, and files within them, downloaded at once |
 | `-j, --connections` | `32` | Ranged requests in flight, across every post (max 128) |
 | `-R, --retries` | `4` | Retry attempts per ranged request |
-| `-c, --cookies` | | Path to a `cookies.txt` export, saved for later runs |
+| `-c, --cookies` | | Path to a `cookies.txt` export, kept for later runs |
 | `--use-browser` | | Path to a browser executable that clears a Cloudflare challenge |
 | `--show-browser` | `false` | Show that browser instead of running it headless |
 | `-J, --no-jacket` | `false` | Do not embed jacket art |
@@ -206,13 +206,43 @@ Without them, use `-J -T -H` to download the audio untouched. Stream-only posts 
 
 ## Cloudflare
 
-When a challenge appears, jasmr-dl opens a browser to clear it, writes `cookies.txt` beside the binary, and reuses it on later runs. Point `--use-browser` at an executable if none is found, and pass `--show-browser` to watch it.
+When a challenge appears, jasmr-dl opens a browser to clear it and keeps the cookies together with the User-Agent they were earned under. Later runs reuse both. Point `--use-browser` at an executable if none is found, and pass `--show-browser` to watch it.
 
-If that fails, open the post in your own browser, export its cookies as `cookies.txt`, and leave the file beside the binary. Pass a path with `-c` once and it is copied into place.
+If that fails, export the post's cookies from a browser as `cookies.txt` and pass the path with `-c` once. The file is kept from then on.
 
 ```
 jasmr-dl https://japaneseasmr.com/12345/ -c C:\path\cookies.txt
 ```
+
+Cookies and the browser profile live in the per-user config directory:
+
+| Platform | Path |
+| --- | --- |
+| Windows | `%AppData%\jasmr-dl` |
+| macOS | `~/Library/Application Support/jasmr-dl` |
+| Linux | `~/.config/jasmr-dl` |
+
+`JASMR_DL_STATE_DIR` overrides that path. A `cookies.txt` in the working directory or beside the binary is also read.
+
+## Embedding
+
+`pkg/jasmrdl` is the package to import. A run takes its configuration from a `Config`, and reads and writes its Cloudflare clearance through a `Store`.
+
+```go
+sum, err := jasmrdl.Run(ctx, jasmrdl.Config{
+	Targets:   targets,
+	BasePath:  "/srv/audio",
+	Store:     jasmrdl.FileStore{Dir: "/var/lib/jasmr-dl"},
+	StoreKey:  userID + "@" + jasmrdl.Host,
+	Challenge: jasmrdl.ChallengeOptions{Enabled: true, Args: jasmrdl.ContainerArgs},
+})
+```
+
+`StoreKey` scopes the clearance, so each account keeps its own. `FileStore` writes one `cookies.txt` per key, `MemoryStore` holds them in the process, and any other `Store` implementation puts them elsewhere.
+
+`Stdout`, `Stderr` and `Progress` may be nil. The returned `Summary` reports the posts, the files saved and the failures.
+
+Chrome needs `--no-sandbox` and `--disable-dev-shm-usage` to start inside a container; `jasmrdl.ContainerArgs` holds both.
 
 ## Build
 
