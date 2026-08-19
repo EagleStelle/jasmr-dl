@@ -4,15 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/EagleStelle/jasmr-dl/internal/challenge"
 	"github.com/EagleStelle/jasmr-dl/internal/downloader"
@@ -52,31 +56,16 @@ var templateShapes = []struct {
 }
 
 func runDownload(cmd *cobra.Command, args []string) error {
-	target, err := parseAlbumURL(args[0])
+	if err := checkFlags(); err != nil {
+		return err
+	}
+	given, err := givenTemplate(cmd)
 	if err != nil {
 		return err
 	}
-	if concurrency < 1 {
-		return fmt.Errorf("--concurrency must be at least 1, got %d", concurrency)
-	}
-	if connections < 1 {
-		return fmt.Errorf("--connections must be at least 1, got %d", connections)
-	}
-	if retries < 0 {
-		return fmt.Errorf("--retries cannot be negative, got %d", retries)
-	}
-	// Settle a bad template before anything is fetched. Which shape the post
-	// takes is not known yet, so every shape is parsed.
-	var given string
-	if cmd.Flags().Changed("output") {
-		if given = strings.TrimSpace(outputTmpl); given == "" {
-			return errors.New("output template is empty")
-		}
-		for _, shape := range templateShapes {
-			if _, err := templateFor(given, shape.split, shape.files); err != nil {
-				return err
-			}
-		}
+	targets, err := targetsFrom(cmd, args)
+	if err != nil {
+		return err
 	}
 
 	// One Ctrl+C cancels every in-flight request cleanly.
@@ -88,14 +77,129 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	cmd.Printf("[info] fetching %s\n", target)
-	album, err := fetchAlbum(ctx, cmd, target, &sess)
+	plans, broken, err := planAll(ctx, cmd, &sess, targets, given)
 	if err != nil {
 		return err
 	}
-	// The page came back, so the cookies work and are worth keeping. A solve has
-	// already written its own, which a stale export must not undo.
-	if cookieFile != "" && !sess.solved {
+	if len(plans) == 0 {
+		return report(cmd, nil, broken, len(targets))
+	}
+
+	debugf(cmd, "%s at once, %d requests in flight, %d retries each",
+		plural(concurrency, "file"), connections, retries)
+
+	// One budget for the whole run: the ceilings are what the host sees, so
+	// they cannot be per post.
+	budget := downloader.NewBudget(concurrency, connections)
+	prog := downloader.NewProgress(cmd.OutOrStdout())
+
+	outcomes := make([]outcome, len(plans))
+	g := new(errgroup.Group)
+	// -N bounds the posts as well as the files inside them: it is how much the
+	// run does at once, not how much each post does. A post waiting here holds
+	// nothing, since the budget is what the downloads actually draw on.
+	g.SetLimit(concurrency)
+	for i, p := range plans {
+		g.Go(func() error {
+			outcomes[i] = runPost(ctx, cmd, &sess, prog, budget, p)
+			return nil
+		})
+	}
+	_ = g.Wait() // a post never returns an error; failures live in its results
+
+	// Drain the renderer first, or it fights the summary for the same lines.
+	prog.Wait()
+
+	return report(cmd, outcomes, broken, len(targets))
+}
+
+func checkFlags() error {
+	switch {
+	case concurrency < 1:
+		return fmt.Errorf("--concurrency must be at least 1, got %d", concurrency)
+	case connections < 1:
+		return fmt.Errorf("--connections must be at least 1, got %d", connections)
+	case retries < 0:
+		return fmt.Errorf("--retries cannot be negative, got %d", retries)
+	}
+	return nil
+}
+
+// givenTemplate settles a bad -o before anything is fetched. Which shape a post
+// takes is not known yet, so every shape is parsed.
+func givenTemplate(cmd *cobra.Command) (string, error) {
+	if !cmd.Flags().Changed("output") {
+		return "", nil
+	}
+	given := strings.TrimSpace(outputTmpl)
+	if given == "" {
+		return "", errors.New("output template is empty")
+	}
+	for _, shape := range templateShapes {
+		if _, err := templateFor(given, shape.split, shape.files); err != nil {
+			return "", err
+		}
+	}
+	return given, nil
+}
+
+// --- posts ------------------------------------------------------------------
+
+// plan is one post, read and ready to download.
+type plan struct {
+	album    *scraper.Album
+	dir      string
+	tmpl     *naming.Template
+	chapters []scraper.Chapter
+	split    bool
+	jobs     []downloader.Job
+	lines    postLines
+}
+
+// planAll reads every post, one at a time on purpose: a challenge is cleared in
+// one browser rather than several, and the session a solve replaces is written
+// here and only read once the downloads start. It returns the posts it could
+// read and a count of the ones it could not.
+func planAll(ctx context.Context, cmd *cobra.Command, sess *session, targets []string, given string) ([]*plan, int, error) {
+	var (
+		plans  []*plan
+		broken int
+	)
+	for _, target := range targets {
+		// Ctrl+C here ends the run, rather than failing every post left over
+		// and saying so one line at a time.
+		if ctx.Err() != nil {
+			return nil, 0, ctx.Err()
+		}
+
+		p, err := planFor(ctx, cmd, sess, target, given)
+		if err != nil {
+			// A lone post failing is the run failing, and its own error says
+			// more than a count of one ever could.
+			if len(targets) == 1 {
+				return nil, 0, err
+			}
+			warnf(cmd, "[error] %s: %v", target, err)
+			broken++
+			continue
+		}
+		plans = append(plans, p)
+	}
+	return plans, broken, nil
+}
+
+// planFor reads one post and works out everything the download needs from it.
+func planFor(ctx context.Context, cmd *cobra.Command, sess *session, target, given string) (*plan, error) {
+	cmd.Printf("[info] fetching %s\n", target)
+	album, err := fetchAlbum(ctx, cmd, target, sess)
+	if err != nil {
+		return nil, err
+	}
+	// A page came back, so the cookies work and are worth keeping, once for the
+	// run. A solve has already written its own, which a stale export must not
+	// undo.
+	if cookieFile != "" && !sess.solved && !sess.installed {
+		sess.installed = true
 		installCookies(cmd, cookieFile)
 	}
 	reportSource(cmd, album)
@@ -113,13 +217,13 @@ func runDownload(cmd *cobra.Command, args []string) error {
 
 	tmpl, err := templateFor(given, split, len(album.Tracks))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	fields := fieldsFor(album)
 	dir := underBasePath(tmpl.Dir(fields))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create output directory: %w", err)
+		return nil, fmt.Errorf("create output directory: %w", err)
 	}
 
 	jobs := make([]downloader.Job, 0, len(album.Tracks))
@@ -137,55 +241,65 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	prog := downloader.NewProgress(cmd.OutOrStdout())
-	lines := linesFor(album)
+	return &plan{
+		album:    album,
+		dir:      dir,
+		tmpl:     tmpl,
+		chapters: chapters,
+		split:    split,
+		jobs:     jobs,
+		lines:    linesFor(album),
+	}, nil
+}
 
-	pics := fetchPictures(ctx, cmd, &sess, album, dir, prog, lines)
-
+// runPost saves one post's pictures and then its recordings. budget is the
+// run's, shared with every other post going down beside this one.
+func runPost(ctx context.Context, cmd *cobra.Command, sess *session, prog *downloader.Progress, budget downloader.Budget, p *plan) outcome {
 	d := &downloader.Downloader{
-		Client:        sess.client,
-		UserAgent:     sess.userAgent,
-		OutputDir:     dir,
-		Template:      tmpl,
-		Connections:   connections,
-		Retries:       retries,
-		JacketPath:    pics.Jacket,
-		Chapters:      chapters,
-		Split:         split,
-		OnJacketError: func(name string, err error) { cmd.PrintErrf("[warn] %s: %v\n", name, err) },
+		Client:         sess.client,
+		UserAgent:      sess.userAgent,
+		OutputDir:      p.dir,
+		Template:       p.tmpl,
+		Budget:         budget,
+		Retries:        retries,
+		Chapters:       p.chapters,
+		Split:          p.split,
+		OnPictureError: func(err error) { warnf(cmd, "[warn] picture not saved: %v", err) },
+		OnJacketError:  func(name string, err error) { warnf(cmd, "[warn] %s: %v", name, err) },
 		OnChapterDropped: func(name string, start, total time.Duration) {
-			cmd.PrintErrf("[warn] chapter %s begins at %s, past the end of a %s stream; skipped\n",
+			warnf(cmd, "[warn] chapter %s begins at %s, past the end of a %s stream; skipped",
 				name, start.Round(time.Second), total.Round(time.Second))
 		},
 		OnStart: func(name string, total int64) {
-			prog.Start(lines.line(downloader.KindRecording, name), total)
+			prog.Start(p.lines.line(downloader.KindRecording, name), total)
 		},
 		OnProgress: func(name string, done, total int64) {
-			prog.Update(lines.key(downloader.KindRecording, name), done, total)
+			prog.Update(p.lines.key(downloader.KindRecording, name), done, total)
 		},
 		OnSplitStart: func(total int) {
-			prog.StartCount(lines.line(downloader.KindChapter, chaptersName), int64(total))
+			prog.StartCount(p.lines.line(downloader.KindChapter, chaptersName), int64(total))
 		},
 		OnSplitProgress: func(done, total int) {
-			prog.Update(lines.key(downloader.KindChapter, chaptersName), int64(done), int64(total))
+			prog.Update(p.lines.key(downloader.KindChapter, chaptersName), int64(done), int64(total))
 		},
 	}
 
-	debugf(cmd, "%d files at once, %d requests in flight, %d retries each", concurrency, connections, retries)
-	results := d.Run(ctx, jobs, concurrency)
+	// The jacket has to be on disk before the audio it is embedded in.
+	d.JacketPath = fetchPictures(ctx, cmd, d, prog, p)
 
-	// Drain the renderer first, or it fights the summary for the same lines.
-	prog.Wait()
-
-	return report(cmd, dir, results)
+	return outcome{label: p.lines.label, dir: p.dir, results: d.Run(ctx, p.jobs)}
 }
 
 // session is the client and the User-Agent it presents. cf_clearance is bound to
 // the User-Agent that earned it, so the two are only ever replaced together.
+//
+// It is written while the posts are being read, one at a time, and only read
+// once they are downloading. Nothing here is safe to write from a post.
 type session struct {
 	client    *http.Client
 	userAgent string
 	solved    bool // cookies.txt is already current
+	installed bool // the --cookies export is already beside the binary
 }
 
 // newSession loads whatever clearance is already on disk. A run with none still
@@ -474,32 +588,32 @@ func chaptersFor(cmd *cobra.Command, album *scraper.Album) []scraper.Chapter {
 }
 
 // fetchPictures saves the jacket and the gallery together, on one line and in
-// parallel. Best-effort: missing art must not stop a download.
-func fetchPictures(ctx context.Context, cmd *cobra.Command, s *session, album *scraper.Album, dir string, prog *downloader.Progress, lines postLines) downloader.Pictures {
-	jacketURL, gallery := pictureURLs(album)
+// parallel, and returns the jacket the audio embeds. Best-effort: missing art
+// must not stop a download.
+func fetchPictures(ctx context.Context, cmd *cobra.Command, d *downloader.Downloader, prog *downloader.Progress, p *plan) string {
+	jacketURL, gallery := pictureURLs(p.album)
 	count := len(gallery)
 	if jacketURL != "" {
 		count++
 	}
 	if count == 0 {
-		return downloader.Pictures{}
+		return ""
 	}
 
 	// The byte total is projected from the pictures already down, so it moves
 	// until the last one lands.
-	line := lines.line(downloader.KindImage, imagesName)
+	line := p.lines.line(downloader.KindImage, imagesName)
 	prog.StartUnits(line, int64(count))
 
-	pics := downloader.FetchPictures(ctx, s.client, s.userAgent, jacketURL, gallery, album.PageURL, dir,
+	pics := d.FetchPictures(ctx, jacketURL, gallery, p.album.PageURL,
 		func(done int, bytes, total int64) {
 			prog.SetUnits(line.Key, int64(done))
 			prog.Update(line.Key, bytes, total)
-		},
-		func(err error) { cmd.PrintErrf("[warn] picture not saved: %v\n", err) })
+		})
 
 	debugf(cmd, "jacket: %s", orNone(pics.Jacket))
 	debugf(cmd, "gallery: %d saved", len(pics.Gallery))
-	return pics
+	return pics.Jacket
 }
 
 // pictureURLs splits a post's pictures into the jacket the audio embeds and the
@@ -564,34 +678,84 @@ func reportSource(cmd *cobra.Command, album *scraper.Album) {
 	cmd.Printf("[info] source: %s\n", kind)
 }
 
-// report lists the failures and returns an error only if every download failed.
-// One download can leave several files behind, so the two are counted apart.
-func report(cmd *cobra.Command, dir string, results []downloader.Result) error {
-	var failed, files int
-	for _, r := range results {
-		if r.Err != nil {
-			failed++
-			cmd.PrintErrf("[error] %s: %v\n", r.Job.Name, r.Err)
-			continue
+// outcome is what one post came to: the files it saved and where they went.
+type outcome struct {
+	label   string
+	dir     string
+	results []downloader.Result
+}
+
+// tag names the post a failure belongs to, which only a run of several needs.
+func (o outcome) tag(named bool) string {
+	if !named {
+		return ""
+	}
+	return o.label + ": "
+}
+
+// report lists the failures and returns an error only if nothing at all was
+// saved. broken counts the posts that never got as far as a download, posts how
+// many the run set out to fetch. One download can leave several files behind, so
+// files and downloads are counted apart.
+func report(cmd *cobra.Command, outs []outcome, broken, posts int) error {
+	// A run of one is named by its own output directory already.
+	named := posts > 1
+
+	saved, failedPosts := 0, broken
+	for _, o := range outs {
+		var failed, files int
+		for _, r := range o.results {
+			if r.Err != nil {
+				failed++
+				warnf(cmd, "[error] %s%s: %v", o.tag(named), r.Job.Name, r.Err)
+				continue
+			}
+			files += len(r.Paths)
 		}
-		files += len(r.Paths)
+		saved += files
+
+		switch {
+		case failed == len(o.results):
+			failedPosts++
+		case failed > 0:
+			cmd.Printf("[done] %s saved to %s, %s failed\n",
+				plural(files, "recording"), o.dir, plural(failed, "download"))
+		default:
+			cmd.Printf("[done] %s saved to %s\n", plural(files, "recording"), o.dir)
+		}
 	}
 
-	switch {
-	case failed == len(results):
-		return fmt.Errorf("all %s failed", plural(failed, "download"))
-	case failed > 0:
-		cmd.Printf("[done] %s saved to %s, %s failed\n", plural(files, "recording"), dir, plural(failed, "download"))
-	default:
-		cmd.Printf("[done] %s saved to %s\n", plural(files, "recording"), dir)
+	if failedPosts == posts {
+		if !named && len(outs) == 1 {
+			return fmt.Errorf("all %s failed", plural(len(outs[0].results), "download"))
+		}
+		return fmt.Errorf("all %s failed", plural(posts, "post"))
+	}
+	if named {
+		line := fmt.Sprintf("[done] %s from %s", plural(saved, "recording"), plural(posts-failedPosts, "post"))
+		if failedPosts > 0 {
+			line += fmt.Sprintf(", %s failed", plural(failedPosts, "post"))
+		}
+		cmd.Println(line)
 	}
 	return nil
 }
 
-// debugf writes to stderr under --verbose, keeping piped stdout clean.
+// stderrMu hands stderr over one line at a time: every post warns down the same
+// pipe, and half a line inside another is worse than waiting.
+var stderrMu sync.Mutex
+
+// warnf writes one line to stderr, keeping piped stdout clean.
+func warnf(cmd *cobra.Command, format string, args ...any) {
+	stderrMu.Lock()
+	defer stderrMu.Unlock()
+	cmd.PrintErrf(format+"\n", args...)
+}
+
+// debugf writes to stderr under --verbose.
 func debugf(cmd *cobra.Command, format string, args ...any) {
 	if verbose {
-		cmd.PrintErrf("[debug] "+format+"\n", args...)
+		warnf(cmd, "[debug] "+format, args...)
 	}
 }
 
@@ -601,6 +765,70 @@ func plural(n int, noun string) string {
 		return "1 " + noun
 	}
 	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+// targetsFrom is every post the run covers: the arguments, then whatever
+// --batch-file lists. Repeats are dropped, so a post named twice is fetched
+// once. A malformed URL ends the run before anything is fetched, since it is
+// almost always a typo, and finding out after nine downloads helps nobody.
+func targetsFrom(cmd *cobra.Command, args []string) ([]string, error) {
+	raw := args
+	if batchFile != "" {
+		listed, err := readBatchFile(cmd, batchFile)
+		if err != nil {
+			return nil, err
+		}
+		raw = slices.Concat(args, listed)
+	}
+
+	seen := make(map[string]bool, len(raw))
+	targets := make([]string, 0, len(raw))
+	for _, r := range raw {
+		target, err := parseAlbumURL(r)
+		if err != nil {
+			return nil, err
+		}
+		if seen[target] {
+			debugf(cmd, "%s is listed more than once, fetching it once", target)
+			continue
+		}
+		seen[target] = true
+		targets = append(targets, target)
+	}
+
+	if len(targets) == 0 {
+		return nil, errors.New("no URL to download")
+	}
+	return targets, nil
+}
+
+// readBatchFile reads one URL per line, ignoring blank lines and any line that
+// opens with a #. A path of - reads the list from standard input.
+func readBatchFile(cmd *cobra.Command, path string) ([]string, error) {
+	var (
+		data []byte
+		err  error
+	)
+	if path == "-" {
+		data, err = io.ReadAll(cmd.InOrStdin())
+	} else {
+		data, err = os.ReadFile(path)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read batch file: %w", err)
+	}
+
+	var urls []string
+	for line := range strings.Lines(string(data)) {
+		line = strings.TrimSpace(line)
+		// At the start of a line only: a # inside a URL is a fragment, not a
+		// remark.
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		urls = append(urls, line)
+	}
+	return urls, nil
 }
 
 // parseAlbumURL matches the hostname, not a substring, so evil.com cannot pass.

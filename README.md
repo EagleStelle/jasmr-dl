@@ -2,7 +2,8 @@
 
 Download audio from [japaneseasmr.com](https://japaneseasmr.com) posts, tagged and with jacket art.
 
-- Downloads every part of a post in parallel
+- Downloads several posts, and every part of each one, in parallel
+- Reads a list of URLs from a file
 - Embeds jacket art and writes title, artist, circle, RJ code, date and track numbers
 - Cuts a chaptered stream into one file per chapter
 - Saves the post's image gallery alongside the audio
@@ -54,7 +55,36 @@ Audio only:
 jasmr-dl https://japaneseasmr.com/12345/ -J -I -T
 ```
 
-`Ctrl+C` cancels. Exit status is non-zero only when every file fails.
+`Ctrl+C` cancels. Exit status is non-zero only when every post fails.
+
+## Several posts
+
+Give as many URLs as you like. A repeat is fetched once.
+
+```
+jasmr-dl https://japaneseasmr.com/12345/ https://japaneseasmr.com/12346/
+```
+
+`-a` reads them from a file instead, one URL per line, ignoring blank lines and
+any line opening with `#`. A path of `-` reads the list from standard input.
+
+```
+jasmr-dl -a urls.txt
+```
+
+`-N` and `-j` are the run's, not each post's: five posts at `-j 32` draw on one
+32 between them rather than opening 160 at the host. `-N` bounds the posts as
+well as the files inside them, so `-N 1` walks through them one at a time. Every
+post gets its own progress row per recording.
+
+A post that cannot be read, or whose every download fails, is reported and the
+rest carry on:
+
+```
+[done] 3 recordings saved to 2024/RJ123456
+[done] 2 recordings saved to 2024/RJ123457
+[done] 5 recordings from 2 posts, 1 post failed
+```
 
 ## Output template
 
@@ -154,8 +184,9 @@ The stream is cut into one file per chapter.
 | --- | --- | --- |
 | `-o, --output` | `{year}/{rjcode}/<{rjcode}_{number}.{ext}\|{number}_{chapter}.{ext}>` | Template naming each file and the directories above it; `<A\|B>` uses `A` per track, `B` per chapter |
 | `-P, --paths` | | Directory everything is written under |
-| `-N, --concurrency` | `3` | Files downloaded at once |
-| `-j, --connections` | `32` | Ranged requests in flight (max 128) |
+| `-a, --batch-file` | | File listing one URL per line, or `-` for standard input |
+| `-N, --concurrency` | `3` | Posts, and files within them, downloaded at once |
+| `-j, --connections` | `32` | Ranged requests in flight, across every post (max 128) |
 | `-R, --retries` | `4` | Retry attempts per ranged request |
 | `-c, --cookies` | | Path to a `cookies.txt` export, saved for later runs |
 | `--use-browser` | | Path to a browser executable that clears a Cloudflare challenge |
