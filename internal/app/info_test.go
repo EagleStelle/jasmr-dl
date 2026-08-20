@@ -85,7 +85,7 @@ func TestInfoForSplitPieces(t *testing.T) {
 		if got.Chapters != nil {
 			t.Errorf("track %d carries a chapter list; a piece is one chapter already", i)
 		}
-		if got.Album != "RJ123456" {
+		if got.Album != "ある夏の日 [RJ123456]" {
 			t.Errorf("track %d on album %q, want the work's own", i, got.Album)
 		}
 	}

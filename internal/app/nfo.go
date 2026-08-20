@@ -60,7 +60,7 @@ func nfoFor(info Info) nfoAlbum {
 	year, _, _ := splitDate(info.Date)
 
 	a := nfoAlbum{
-		Title:       info.Title,
+		Title:       albumFor(info.Title, info.RJCode),
 		ArtistDesc:  info.Artist,
 		Artist:      info.Artist,
 		AlbumArtist: info.Circle,

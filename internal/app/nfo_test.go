@@ -76,8 +76,8 @@ func TestNFOWritesTheDateUnderEveryName(t *testing.T) {
 func TestNFOCarriesTheWorkAndItsTracks(t *testing.T) {
 	a := nfoFor(sampleInfo())
 
-	if a.Title != "ある夏の日" {
-		t.Errorf("title = %q, want the post's own", a.Title)
+	if a.Title != "ある夏の日 [RJ123456]" {
+		t.Errorf("title = %q, want the post's own with its RJ code", a.Title)
 	}
 	if a.AlbumArtist != "サークル" {
 		t.Errorf("albumartist = %q, want the circle", a.AlbumArtist)
@@ -154,7 +154,7 @@ func TestWriteNFOIsReadableXML(t *testing.T) {
 	if got.XMLName.Local != "album" {
 		t.Errorf("root is <%s>, want <album>", got.XMLName.Local)
 	}
-	if got.Title != "ある夏の日" || len(got.Tracks) != 2 {
+	if got.Title != "ある夏の日 [RJ123456]" || len(got.Tracks) != 2 {
 		t.Errorf("read back %+v, want the post it was written from", got)
 	}
 }

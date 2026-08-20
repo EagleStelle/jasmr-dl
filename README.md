@@ -206,7 +206,7 @@ Nothing is written into a file, or beside it, unless the run asks for it.
 
 | Flag | Writes |
 | --- | --- |
-| `--embed-metadata` | Title, artist, circle, RJ code, date, genre and track numbers into each file, with the post URL and its tags in the comment |
+| `--embed-metadata` | Title, artist, circle, album, date, genre and track numbers into each file, with the post URL and its tags in the comment |
 | `--embed-cover` | The cover art into each file, padded square, as JPEG |
 | `--embed-chapters` | The track list into the file as chapter markers |
 | `--write-cover` | `cover.jpg` beside the audio |
@@ -218,6 +218,10 @@ Nothing is written into a file, or beside it, unless the run asks for it.
 removes what it fetched once the post is done.
 
 Embedding anything needs `ffmpeg`; the four `--write-` flags do not.
+
+The album is named `Title [RJ123456]` wherever it is written — embedded tags,
+`album.nfo` and the `.info.json` alike. A post carrying only the one half is
+named for that half alone.
 
 ### album.nfo
 

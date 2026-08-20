@@ -141,7 +141,7 @@ func (r *run) tagsFor(album *scraper.Album, track scraper.Track, n int) download
 		Title:       titleFor(album, track),
 		Artist:      album.Artists,
 		AlbumArtist: album.Circle,
-		Album:       album.RJCode,
+		Album:       albumFor(album.Title, album.RJCode),
 		Date:        album.Date,
 		Genre:       genre,
 		Comment:     commentFor(album.PageURL, album.Tags),
@@ -160,6 +160,19 @@ func commentFor(url string, tags []string) string {
 		lines = append(lines, "Tags: "+strings.Join(tags, ", "))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// albumFor names the work the same way wherever it is written: the post's
+// title with its DLsite code after it. Either half stands alone where the post
+// carries only the one.
+func albumFor(title, rjCode string) string {
+	switch {
+	case title == "":
+		return rjCode
+	case rjCode == "":
+		return title
+	}
+	return title + " [" + rjCode + "]"
 }
 
 func titleFor(album *scraper.Album, track scraper.Track) string {

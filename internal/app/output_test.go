@@ -47,7 +47,7 @@ func TestTagsForIsGatheredWhateverIsEmbedded(t *testing.T) {
 	}
 
 	tags := r.tagsFor(album, scraper.Track{}, 1)
-	if tags.Title != album.Title || tags.Album != album.RJCode {
+	if tags.Title != album.Title || tags.Album != "ある夏の日 [RJ123456]" {
 		t.Errorf("tags = %+v, want the post's own", tags)
 	}
 	if got := r.embedTags(tags); got != (downloader.Tags{}) {
