@@ -98,14 +98,25 @@ func splitDate(date string) (year, month, day string) {
 	return parts[0], parts[1], parts[2]
 }
 
-// splitting reports whether the run cuts a stream on its chapters.
-func (r *run) splitting(chapters []scraper.Chapter) bool {
-	return !r.cfg.NoSplit && len(chapters) > 0
+// splitting reports whether the run cuts a stream on its chapters. Only a
+// stream is ever cut: a post serving its own file is downloaded whole, so a
+// track list beside one is embedded rather than split on.
+func (r *run) splitting(album *scraper.Album, chapters []scraper.Chapter) bool {
+	if !r.cfg.SplitChapters || len(chapters) == 0 {
+		return false
+	}
+	if album.Source() != scraper.SourceHLS {
+		r.debugf("%d chapters not split: the post serves its own file", len(chapters))
+		return false
+	}
+	return true
 }
 
-// chaptersFor returns chapters only when one file holds the whole work.
+// chaptersFor returns chapters only when one file holds the whole work. What is
+// done with them is the run's to say: they are recorded whether or not anything
+// embeds or splits on them.
 func (r *run) chaptersFor(album *scraper.Album) []scraper.Chapter {
-	if r.cfg.NoChapters || len(album.Chapters) == 0 {
+	if len(album.Chapters) == 0 {
 		return nil
 	}
 	if len(album.Tracks) != 1 {
@@ -115,11 +126,17 @@ func (r *run) chaptersFor(album *scraper.Album) []scraper.Chapter {
 	return album.Chapters
 }
 
-// tagsFor builds the metadata written into one file, n being its place in the post.
-func (r *run) tagsFor(album *scraper.Album, track scraper.Track, n int) downloader.Tags {
-	if r.cfg.NoMetadata {
+// embedTags is what the downloader writes into a file. The full tags are kept
+// either way, since the info record carries them whatever is embedded.
+func (r *run) embedTags(tags downloader.Tags) downloader.Tags {
+	if !r.cfg.EmbedMetadata {
 		return downloader.Tags{}
 	}
+	return tags
+}
+
+// tagsFor builds the metadata for one file, n being its place in the post.
+func (r *run) tagsFor(album *scraper.Album, track scraper.Track, n int) downloader.Tags {
 	return downloader.Tags{
 		Title:       titleFor(album, track),
 		Artist:      album.Artists,
@@ -127,7 +144,7 @@ func (r *run) tagsFor(album *scraper.Album, track scraper.Track, n int) download
 		Album:       album.RJCode,
 		Date:        album.Date,
 		Genre:       genre,
-		Comment:     commentFor(album),
+		Comment:     commentFor(album.PageURL, album.Tags),
 		Track:       n,
 		TrackTotal:  len(album.Tracks),
 		Disc:        1,
@@ -136,11 +153,11 @@ func (r *run) tagsFor(album *scraper.Album, track scraper.Track, n int) download
 }
 
 // commentFor packs what no tag of its own carries into the comment field, one
-// key per line.
-func commentFor(album *scraper.Album) string {
-	lines := []string{"URL: " + album.PageURL}
-	if len(album.Tags) > 0 {
-		lines = append(lines, "Tags: "+strings.Join(album.Tags, ", "))
+// key per line. The NFO's plot is the same text, for the same reason.
+func commentFor(url string, tags []string) string {
+	lines := []string{"URL: " + url}
+	if len(tags) > 0 {
+		lines = append(lines, "Tags: "+strings.Join(tags, ", "))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -152,13 +169,14 @@ func titleFor(album *scraper.Album, track scraper.Track) string {
 	return album.Title + " - " + track.Name
 }
 
-// pictureURLs splits a post's pictures into the cover the audio embeds and the
-// gallery behind it, dropping whatever the settings turn off.
+// pictureURLs splits a post's pictures into the cover and the gallery behind
+// it, dropping whatever the settings turn off. The cover comes down for either
+// of the two settings that want it, one keeping it and the other embedding it.
 func (r *run) pictureURLs(album *scraper.Album) (cover string, gallery []string) {
-	if !r.cfg.NoCover {
+	if r.cfg.WriteCover || r.cfg.EmbedCover {
 		cover = album.CoverURL
 	}
-	if r.cfg.NoImages {
+	if !r.cfg.WriteImages {
 		return cover, nil
 	}
 

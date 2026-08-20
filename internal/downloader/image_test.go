@@ -122,9 +122,13 @@ func TestFetchPicturesSavesTheCoverBesideTheGallery(t *testing.T) {
 	dir := t.TempDir()
 	gallery := []string{ts.URL + "/1.jpg", ts.URL + "/2.jpg", ts.URL + "/3.jpg"}
 	d := pictureFetcher(ts, dir, nil)
-	pics := d.FetchPictures(context.Background(), ts.URL+"/cover.jpg", gallery, ts.URL, nil)
+	pics := d.FetchPictures(context.Background(), PictureJob{
+		CoverURL: ts.URL + "/cover.jpg",
+		Gallery:  gallery,
+		Referer:  ts.URL,
+	}, nil)
 
-	if got, want := pics.Cover, filepath.Join(dir, coverName+".png"); got != want {
+	if got, want := pics.Cover, filepath.Join(dir, CoverName+".png"); got != want {
 		t.Errorf("cover at %q, want %q", got, want)
 	}
 	if len(pics.Gallery) != len(gallery) {
@@ -161,7 +165,7 @@ func TestFetchPicturesNumbersByPositionThroughAFailure(t *testing.T) {
 		failures++
 		mu.Unlock()
 	})
-	pics := d.FetchPictures(context.Background(), "", gallery, ts.URL, nil)
+	pics := d.FetchPictures(context.Background(), PictureJob{Gallery: gallery, Referer: ts.URL}, nil)
 
 	if failures != 1 {
 		t.Errorf("%d failures reported, want 1", failures)
@@ -206,7 +210,7 @@ func TestFetchPicturesFetchesInParallel(t *testing.T) {
 	d := pictureFetcher(ts, t.TempDir(), nil)
 	done := make(chan Pictures, 1)
 	go func() {
-		done <- d.FetchPictures(context.Background(), "", gallery, ts.URL, nil)
+		done <- d.FetchPictures(context.Background(), PictureJob{Gallery: gallery, Referer: ts.URL}, nil)
 	}()
 
 	for i := range n {
@@ -236,7 +240,7 @@ func TestFetchPicturesReportsUnitsAndBytes(t *testing.T) {
 	var lastBytes, lastTotal int64
 
 	d := pictureFetcher(ts, t.TempDir(), nil)
-	d.FetchPictures(context.Background(), "", gallery, ts.URL,
+	d.FetchPictures(context.Background(), PictureJob{Gallery: gallery, Referer: ts.URL},
 		func(done int, bytes, total int64) {
 			mu.Lock()
 			lastDone, lastBytes, lastTotal = done, bytes, total

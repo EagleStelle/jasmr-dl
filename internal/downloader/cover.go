@@ -23,8 +23,8 @@ const (
 	// clear of anything the gallery legitimately holds.
 	maxImageBytes = 64 << 20
 
-	// coverName is the album art, kept beside the audio it is embedded in.
-	coverName = "cover"
+	// CoverName is the album art, kept beside the audio it is embedded in.
+	CoverName = "cover"
 
 	// imagesDirName holds the rest of the gallery, which no file carries.
 	imagesDirName = "images"
@@ -41,6 +41,15 @@ var coverMuxers = map[string]string{
 	".m4a":  "ipod",
 	".mp3":  "mp3",
 	".flac": "flac",
+}
+
+// PictureJob is a post's pictures. CoverName is the cover's filename without
+// an extension, which the bytes decide; empty means CoverName.
+type PictureJob struct {
+	CoverURL  string
+	CoverName string
+	Gallery   []string
+	Referer   string
 }
 
 // Pictures is what a post carries beside its audio.
@@ -65,8 +74,8 @@ type picture struct {
 // onProgress reports the pictures finished, the bytes on disk and the total
 // those project to. One that will not come down goes to OnPictureError and is
 // skipped, since pictures are not what the run is for.
-func (d *Downloader) FetchPictures(ctx context.Context, coverURL string, gallery []string, referer string, onProgress func(done int, bytes, total int64)) Pictures {
-	targets := pictureTargets(coverURL, gallery, d.OutputDir)
+func (d *Downloader) FetchPictures(ctx context.Context, job PictureJob, onProgress func(done int, bytes, total int64)) Pictures {
+	targets := pictureTargets(job, d.OutputDir)
 	if len(targets) == 0 {
 		return Pictures{}
 	}
@@ -95,7 +104,7 @@ func (d *Downloader) FetchPictures(ctx context.Context, coverURL string, gallery
 				got        int64
 				advertised int64
 			)
-			path, n, err := fetchImage(gctx, d.Client, d.UserAgent, p, referer, func(sz int64) {
+			path, n, err := fetchImage(gctx, d.Client, d.UserAgent, p, job.Referer, func(sz int64) {
 				advertised = sz
 				sizes.know(sz)
 				report()
@@ -144,14 +153,18 @@ func (d *Downloader) FetchPictures(ctx context.Context, coverURL string, gallery
 
 // pictureTargets names every picture a post opens. The cover leads, so a run
 // that saves nothing else still has its art.
-func pictureTargets(coverURL string, gallery []string, dir string) []picture {
+func pictureTargets(job PictureJob, dir string) []picture {
 	var targets []picture
-	if coverURL != "" {
-		targets = append(targets, picture{url: coverURL, dir: dir, name: coverName, cover: true})
+	if job.CoverURL != "" {
+		name := job.CoverName
+		if name == "" {
+			name = CoverName
+		}
+		targets = append(targets, picture{url: job.CoverURL, dir: dir, name: name, cover: true})
 	}
 
 	imagesDir := filepath.Join(dir, imagesDirName)
-	for i, u := range gallery {
+	for i, u := range job.Gallery {
 		// Numbered by position, not by how many landed, so one picture
 		// failing does not shift the names of the pictures after it.
 		targets = append(targets, picture{url: u, dir: imagesDir, name: fmt.Sprintf("%02d", i+1)})
@@ -271,6 +284,21 @@ func (d *Downloader) hasCover(ctx context.Context, audio string) bool {
 		return false
 	}
 	return strings.Contains(out, "video")
+}
+
+// hasTag reports whether a file already carries one metadata value, which is
+// how a run embedding no art tells a tagged file from a truncated one.
+func (d *Downloader) hasTag(ctx context.Context, audio, key string) bool {
+	out, err := d.ffprobe(ctx,
+		"-show_entries", "format_tags="+key,
+		"-of", "default=noprint_wrappers=1:nokey=1", audio)
+	return err == nil && strings.TrimSpace(out) != ""
+}
+
+// hasChapters reports whether a file already carries chapter markers.
+func (d *Downloader) hasChapters(ctx context.Context, audio string) bool {
+	out, err := d.ffprobe(ctx, "-show_entries", "chapter=id", "-of", "csv=p=0", audio)
+	return err == nil && strings.TrimSpace(out) != ""
 }
 
 // ffprobe reads one value out of a file. Errors are quiet: only the value the

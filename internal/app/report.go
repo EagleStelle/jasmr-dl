@@ -18,7 +18,7 @@ func (p PostResult) Files() int {
 	n := 0
 	for _, r := range p.Results {
 		if r.Err == nil {
-			n += len(r.Paths)
+			n += len(r.Files)
 		}
 	}
 	return n

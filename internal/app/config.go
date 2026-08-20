@@ -58,11 +58,37 @@ type Config struct {
 	// Retries is retry attempts per ranged request. Zero means none.
 	Retries int
 
-	NoMetadata bool
-	NoCover   bool
-	NoImages   bool
-	NoChapters bool
-	NoSplit    bool
+	// WriteInfoJSON writes the post's metadata and chapters to a JSON file
+	// beside the audio, whatever was embedded. LoadInfoJSON reads it back.
+	WriteInfoJSON bool
+
+	// WriteCover saves the post's cover art beside the audio.
+	WriteCover bool
+
+	// WriteImages saves the rest of the post's gallery under images/.
+	WriteImages bool
+
+	// WriteNFO writes an album.nfo for a media server to read.
+	WriteNFO bool
+
+	// EmbedMetadata writes title, artist and album tags into each file.
+	EmbedMetadata bool
+
+	// EmbedCover embeds the post's cover art in each file. The art is fetched
+	// for it whether or not WriteCover keeps it.
+	EmbedCover bool
+
+	// EmbedChapters writes the track list into a file SplitChapters left whole.
+	EmbedChapters bool
+
+	// SplitChapters cuts a chaptered stream into one file per chapter. It wins
+	// over EmbedChapters, each piece being one chapter already.
+	SplitChapters bool
+
+	// LoadInfoJSON is a written info.json to apply to the recordings beside it,
+	// which fetches nothing and takes no Target. The Embed fields say what of it
+	// is written.
+	LoadInfoJSON string
 
 	// Store keeps what a solve earns and hands back an earlier run's. Nil keeps
 	// nothing.
@@ -132,9 +158,16 @@ func (c Config) prepared() (Config, error) {
 }
 
 func (c Config) validate() error {
-	switch {
-	case len(c.Targets) == 0:
+	// A run either fetches posts or writes over what an earlier one left.
+	if c.LoadInfoJSON != "" {
+		if len(c.Targets) > 0 {
+			return errors.New("load-info-json writes over files already on disk, so it takes no URL")
+		}
+	} else if len(c.Targets) == 0 {
 		return errors.New("no URL to download")
+	}
+
+	switch {
 	case c.Concurrency < 0:
 		return fmt.Errorf("concurrency must be at least 1, got %d", c.Concurrency)
 	case c.Connections < 0:

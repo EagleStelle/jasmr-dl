@@ -26,6 +26,13 @@ type (
 	Summary          = app.Summary
 	PostResult       = app.PostResult
 	Result           = downloader.Result
+	OutputFile       = downloader.OutputFile
+
+	// Info is a post as Config.WriteInfoJSON writes it, and as
+	// Config.LoadInfoJSON reads it back.
+	Info        = app.Info
+	InfoTrack   = app.InfoTrack
+	InfoChapter = app.InfoChapter
 
 	Clearance   = session.Clearance
 	Cookie      = downloader.Cookie

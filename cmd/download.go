@@ -40,7 +40,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	cfg, err := config(cmd, targets)
+	cfg, err := config(cmd, &opts, targets)
 	if err != nil {
 		return err
 	}
@@ -54,22 +54,26 @@ func runDownload(cmd *cobra.Command, args []string) error {
 }
 
 // config turns the flags into one run.
-func config(cmd *cobra.Command, targets []string) (app.Config, error) {
+func config(cmd *cobra.Command, opts *options, targets []string) (app.Config, error) {
 	dir := session.DefaultDir()
 	store := session.FileStore{Dir: dir, Fallbacks: legacyCookieFiles()}
 
 	cfg := app.Config{
-		Targets:     targets,
-		BasePath:    opts.basePath,
-		Concurrency: opts.concurrency,
-		Connections: opts.connections,
-		Retries:     opts.retries,
-		NoMetadata:  opts.noMetadata,
-		NoCover:    opts.noCover,
-		NoImages:    opts.noImages,
-		NoChapters:  opts.noChapters,
-		NoSplit:     opts.noSplit,
-		Store:       store,
+		Targets:       targets,
+		BasePath:      opts.basePath,
+		Concurrency:   opts.concurrency,
+		Connections:   opts.connections,
+		Retries:       opts.retries,
+		WriteInfoJSON: opts.writeInfoJSON,
+		WriteCover:    opts.writeCover,
+		WriteImages:   opts.writeImages,
+		WriteNFO:      opts.writeNFO,
+		EmbedMetadata: opts.embedMetadata,
+		EmbedCover:    opts.embedCover,
+		EmbedChapters: opts.embedChapters,
+		SplitChapters: opts.splitChapters,
+		LoadInfoJSON:  opts.loadInfoJSON,
+		Store:         store,
 		Challenge: app.ChallengeOptions{
 			Enabled:     true,
 			BrowserPath: opts.browserPath,
@@ -80,6 +84,12 @@ func config(cmd *cobra.Command, targets []string) (app.Config, error) {
 		Stderr:   cmd.ErrOrStderr(),
 		Progress: cmd.OutOrStdout(),
 		Log:      func(format string, args ...any) { debugf(cmd, format, args...) },
+	}
+
+	// A record names everything it carries, so applying one writes all of it
+	// unless the run named which part it wanted.
+	if cfg.LoadInfoJSON != "" && !embedNamed(cmd) {
+		cfg.EmbedMetadata, cfg.EmbedCover, cfg.EmbedChapters = true, true, true
 	}
 
 	if cmd.Flags().Changed("output") {
@@ -98,6 +108,17 @@ func config(cmd *cobra.Command, targets []string) (app.Config, error) {
 		cfg.Clearance = clearance
 	}
 	return cfg, nil
+}
+
+// embedNamed reports whether the run said what to write into a file, whether on
+// the command line or in a config file.
+func embedNamed(cmd *cobra.Command) bool {
+	for _, name := range []string{"embed-metadata", "embed-cover", "embed-chapters"} {
+		if cmd.Flags().Changed(name) {
+			return true
+		}
+	}
+	return false
 }
 
 // legacyCookieFiles are where earlier releases left a cookies.txt, read but

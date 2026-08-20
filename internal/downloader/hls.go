@@ -35,7 +35,7 @@ const (
 )
 
 // assembleHLS rebuilds a work from its segments, kept until the remux succeeds.
-func (d *Downloader) assembleHLS(ctx context.Context, job Job) ([]string, error) {
+func (d *Downloader) assembleHLS(ctx context.Context, job Job) ([]OutputFile, error) {
 	// Before fetching anything: failing after 160 MB is no use.
 	tools, err := findFFmpeg()
 	if err != nil {
@@ -53,7 +53,7 @@ func (d *Downloader) assembleHLS(ctx context.Context, job Job) ([]string, error)
 	}
 	final := filepath.Join(d.OutputDir, name)
 	if _, statErr := os.Stat(final); statErr == nil {
-		return []string{final}, nil
+		return wholeFile(final), nil
 	}
 
 	if err := d.buildStream(ctx, job, tools, final, name); err != nil {
@@ -66,7 +66,7 @@ func (d *Downloader) assembleHLS(ctx context.Context, job Job) ([]string, error)
 	if err != nil {
 		return nil, err
 	}
-	return []string{path}, nil
+	return wholeFile(path), nil
 }
 
 // buildStream fetches every segment and remuxes them into final.

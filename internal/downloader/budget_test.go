@@ -159,7 +159,7 @@ func TestBudgetCapsPicturesAcrossDownloaders(t *testing.T) {
 				OutputDir: t.TempDir(),
 				Budget:    budget,
 			}
-			d.FetchPictures(context.Background(), "", gallery, ts.URL, nil)
+			d.FetchPictures(context.Background(), PictureJob{Gallery: gallery, Referer: ts.URL}, nil)
 			return nil
 		})
 	}

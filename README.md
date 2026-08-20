@@ -1,13 +1,15 @@
 # jasmr-dl
 
-Download audio from [japaneseasmr.com](https://japaneseasmr.com) posts, tagged and with cover art.
+Download audio from [japaneseasmr.com](https://japaneseasmr.com) posts, with metadata, cover art and chapters on request.
 
 - Downloads several posts, and every part of each one, in parallel
 - Reads a list of URLs from a file
 - Embeds cover art and writes title, artist, circle, RJ code, date and track numbers
 - Records the post URL and its tags in the comment field
-- Cuts a chaptered stream into one file per chapter
-- Saves the post's image gallery alongside the audio
+- Cuts a chaptered stream into one file per chapter, or embeds the track list as chapter markers
+- Saves the cover art and the post's image gallery alongside the audio
+- Writes an `album.nfo` for Kodi, Jellyfin and Emby
+- Writes the whole post to a JSON file, and applies that file to the recordings later
 - Handles posts that serve only the site's stream
 - Names files and directories from a template
 - Clears Cloudflare challenges in a browser and reuses the clearance
@@ -28,32 +30,42 @@ go install github.com/EagleStelle/jasmr-dl@latest
 jasmr-dl https://japaneseasmr.com/12345/
 ```
 
-Files land under the post's RJ code:
+The audio lands under the post's RJ code, untouched:
+
+```
+RJ123456/RJ123456_1.mp3
+RJ123456/RJ123456_2.mp3
+```
+
+Everything beyond the audio is asked for. Tags and art:
+
+```
+jasmr-dl https://japaneseasmr.com/12345/ --embed-metadata --embed-cover --write-cover
+```
 
 ```
 RJ123456/RJ123456_1.mp3
 RJ123456/RJ123456_2.mp3
 RJ123456/cover.jpg
-RJ123456/images/01.jpg
 ```
 
-A post that serves a chaptered stream is cut into its chapters instead:
+A post that serves a chaptered stream can be cut into its chapters, and the
+gallery saved beside them:
+
+```
+jasmr-dl https://japaneseasmr.com/12345/ --split-chapters --write-images
+```
 
 ```
 RJ123456/01_はじめに.m4a
 RJ123456/02_耳かき.m4a
+RJ123456/images/01.jpg
 ```
 
 Go faster with more ranged requests in flight, and more files at once:
 
 ```
 jasmr-dl https://japaneseasmr.com/12345/ -j 64 -N 8
-```
-
-Audio only:
-
-```
-jasmr-dl https://japaneseasmr.com/12345/ -M -C -I
 ```
 
 `Ctrl+C` cancels. Exit status is non-zero only when every post fails.
@@ -122,7 +134,8 @@ leaf per shape.
 
 Cover art and the gallery follow the audio: `cover.jpg` beside it, the rest
 under `images/`. They come down together, on one progress line that counts both
-the pictures and their bytes.
+the pictures and their bytes. `album.nfo` and the `.info.json` sit in the same
+directory as the audio.
 
 ### Divider
 
@@ -170,14 +183,82 @@ Given `-o "{year}/{title} - {number}.{ext}"`:
 
 ## Chapters
 
-A post serves either separate files, or one stream with a track list beside it.
-The stream is cut into one file per chapter.
+A post serves one of two shapes: separate files, or one stream with a track list
+beside it. Only the second has chapters, and only where the whole work is that
+one stream.
 
 | | |
 | --- | --- |
-| default | One file per chapter |
-| `-S` | One file, the track list embedded as chapters |
-| `-H` | One file, no chapter metadata at all |
+| neither flag | One file, no track list written anywhere |
+| `--embed-chapters` | One file, the track list embedded as chapter markers |
+| `--split-chapters` | One file per chapter, each titled for it |
+
+`--split-chapters` wins where both are named: every piece is one chapter
+already, so there is nothing left to mark inside it. A post that already serves
+separate files is left alone by both.
+
+A chapter the stream ends before is reported and skipped, and the last chapter
+runs to the file's real length rather than what the playlist claimed.
+
+## Metadata
+
+Nothing is written into a file, or beside it, unless the run asks for it.
+
+| Flag | Writes |
+| --- | --- |
+| `--embed-metadata` | Title, artist, circle, RJ code, date, genre and track numbers into each file, with the post URL and its tags in the comment |
+| `--embed-cover` | The cover art into each file, padded square, as JPEG |
+| `--embed-chapters` | The track list into the file as chapter markers |
+| `--write-cover` | `cover.jpg` beside the audio |
+| `--write-images` | The rest of the post's gallery under `images/` |
+| `--write-nfo` | `album.nfo`, read by Kodi, Jellyfin, and Emby |
+| `--write-info-json` | `RJ123456.info.json`, the whole post as JSON |
+
+`--embed-cover` fetches the art whether or not `--write-cover` keeps it, and
+removes what it fetched once the post is done.
+
+Embedding anything needs `ffmpeg`; the four `--write-` flags do not.
+
+### album.nfo
+
+`--write-nfo` writes one `album.nfo` per post directory. Several values go out
+twice, under the name each server knows: `<plot>` for Jellyfin and Emby beside
+`<review>` for Kodi, `<premiered>` beside `<releasedate>`, and each of the post's
+tags as both `<tag>` and the `<style>` Kodi's music scraper reads. A server
+ignores what it does not know, so every reader gets the value.
+
+The post URL and its tag list have no album element of their own, so they go in
+the plot, where every server will at least display them. The RJ code goes out as
+a `<uniqueid type="rjcode">`.
+
+### info.json
+
+`--write-info-json` records the whole post: title, circle, artist, date, tags,
+the URL, the chapter list, and the metadata for every file it wrote. It records
+all of that whatever the run embedded, so a download that wrote no tags still
+leaves everything needed to write them later.
+
+```
+jasmr-dl https://japaneseasmr.com/12345/ --embed-metadata --write-info-json --write-nfo
+```
+
+`--load-info-json` writes a record back into the recordings beside it, fetching
+nothing:
+
+```
+jasmr-dl --load-info-json RJ123456/RJ123456.info.json
+```
+
+On its own that writes everything the record holds. Naming an embed flag narrows
+it to what was named:
+
+```
+jasmr-dl --load-info-json RJ123456/RJ123456.info.json --embed-chapters
+```
+
+Files are read relative to the record, so a directory that was moved as a whole
+still applies. A file the record names but the disk does not carry is reported
+and the rest carry on. `--load-info-json` takes no URL.
 
 ## Options
 
@@ -192,12 +273,23 @@ The stream is cut into one file per chapter.
 | `-c, --cookies` | | Path to a `cookies.txt` export, kept for later runs |
 | `--use-browser` | | Path to a browser executable that clears a Cloudflare challenge |
 | `--show-browser` | `false` | Show that browser instead of running it headless |
-| `-M, --no-metadata` | `false` | Do not write title, artist or album metadata |
-| `-C, --no-cover` | `false` | Do not embed cover art |
-| `-I, --no-images` | `false` | Do not save the rest of the post's gallery |
-| `-H, --no-chapters` | `false` | Do not use the track list: no chapters, no split |
-| `-S, --no-split` | `false` | Do not cut a chaptered stream into one file per chapter |
+| `--write-info-json` | `false` | Write the post's metadata and chapters to a JSON file |
+| `--write-cover` | `false` | Save the post's cover art |
+| `--write-images` | `false` | Save the rest of the post's gallery |
+| `--write-nfo` | `false` | Write an `album.nfo` for a media server to read |
+| `--embed-metadata` | `false` | Write title, artist and album tags into each file |
+| `--embed-cover` | `false` | Embed the cover art in each file |
+| `--embed-chapters` | `false` | Write the track list into the file as chapter markers |
+| `--split-chapters` | `false` | Cut a chaptered stream into one file per chapter |
+| `--load-info-json` | | Path to a written JSON file, applied to the recordings beside it |
 | `-v, --verbose` | `false` | Debug logging on stderr |
+
+A boolean flag is turned off again with `=false`, which is how a run overrides
+what a config file or an environment variable set:
+
+```
+jasmr-dl https://japaneseasmr.com/12345/ --write-images=false
+```
 
 ## Configuration
 
@@ -216,7 +308,9 @@ concurrency = 8
 connections = 64
 output = {circle}/{rjcode}/{number}. {chapter}.{ext}
 paths = D:\Audio
-no-images
+embed-metadata
+embed-cover
+split-chapters
 ```
 
 The environment variable for a flag is its long name uppercased, with dashes as underscores and `JASMR_DL_` in front:
@@ -224,16 +318,16 @@ The environment variable for a flag is its long name uppercased, with dashes as 
 ```
 JASMR_DL_CONCURRENCY=8
 JASMR_DL_PATHS=/srv/audio
-JASMR_DL_NO_IMAGES=true
+JASMR_DL_EMBED_METADATA=true
 ```
 
 Setting `JASMR_DL_NO_CONFIG` to any value skips both files.
 
 ## Requirements
 
-`ffmpeg` and `ffprobe` are required for cover art, tags, and posts that serve only the site's stream. Put both on `PATH`, or beside the `jasmr-dl` binary.
+`ffmpeg` and `ffprobe` are required by every `--embed-` flag, by `--split-chapters`, by `--load-info-json`, and by posts that serve only the site's stream. Put both on `PATH`, or beside the `jasmr-dl` binary.
 
-Without them, use `-M -C -H` to download the audio untouched. Stream-only posts will not work.
+Without them a run downloads the audio untouched, and `--write-cover`, `--write-images`, `--write-nfo` and `--write-info-json` still work. Stream-only posts will not.
 
 ## Cloudflare
 
@@ -261,13 +355,21 @@ Cookies and the browser profile live in the per-user config directory:
 
 ```go
 sum, err := jasmrdl.Run(ctx, jasmrdl.Config{
-	Targets:   targets,
-	BasePath:  "/srv/audio",
-	Store:     jasmrdl.FileStore{Dir: "/var/lib/jasmr-dl"},
-	StoreKey:  userID + "@" + jasmrdl.Host,
-	Challenge: jasmrdl.ChallengeOptions{Enabled: true, Args: jasmrdl.ContainerArgs},
+	Targets:       targets,
+	BasePath:      "/srv/audio",
+	EmbedMetadata: true,
+	EmbedCover:    true,
+	SplitChapters: true,
+	WriteInfoJSON: true,
+	Store:         jasmrdl.FileStore{Dir: "/var/lib/jasmr-dl"},
+	StoreKey:      userID + "@" + jasmrdl.Host,
+	Challenge:     jasmrdl.ChallengeOptions{Enabled: true, Args: jasmrdl.ContainerArgs},
 })
 ```
+
+The `Write` and `Embed` fields are the flags of the same name, and default to
+off exactly as they do. `LoadInfoJSON` names a record to write back instead of
+downloading, in which case `Targets` must be empty.
 
 `StoreKey` scopes the clearance, so each account keeps its own. `FileStore` writes one `cookies.txt` per key, `MemoryStore` holds them in the process, and any other `Store` implementation puts them elsewhere.
 

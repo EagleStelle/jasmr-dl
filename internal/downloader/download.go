@@ -59,6 +59,10 @@ type Downloader struct {
 	// embedding the chapters into a single file.
 	Split bool
 
+	// EmbedChapters writes Chapters into a file the split left whole. A split
+	// run has no use for it: each piece is one chapter already.
+	EmbedChapters bool
+
 	// Budget is what this download shares with every other one in the run,
 	// posts included. Its zero value is no ceiling at all.
 	Budget Budget
@@ -68,8 +72,9 @@ type Downloader struct {
 	OnStart    func(name string, total int64)
 	OnProgress ProgressFunc
 
-	// OnCoverError reports art that could not be attached; the audio is fine.
-	OnCoverError func(name string, err error)
+	// OnTagError reports art, tags or chapters that could not be attached; the
+	// audio is fine.
+	OnTagError func(name string, err error)
 
 	// OnPictureError reports a picture that would not come down; a post's art
 	// is not what the run is for.
@@ -84,9 +89,21 @@ type Downloader struct {
 	OnSplitProgress func(done, total int)
 }
 
+// OutputFile is one file a job wrote. Chapter is its place in Chapters, or -1
+// where the file holds the whole recording.
+type OutputFile struct {
+	Path    string
+	Chapter int
+}
+
+// wholeFile is the one file a job that was not split came to.
+func wholeFile(path string) []OutputFile {
+	return []OutputFile{{Path: path, Chapter: -1}}
+}
+
 // Download fetches one job, resuming a partial file if one is present. It
-// returns the final paths on disk, more than one where a stream was split.
-func (d *Downloader) Download(ctx context.Context, job Job) ([]string, error) {
+// returns the files on disk, more than one where a stream was split.
+func (d *Downloader) Download(ctx context.Context, job Job) ([]OutputFile, error) {
 	var lastErr error
 
 	// One extra attempt beyond Retries so Retries=0 still tries once.
@@ -97,9 +114,9 @@ func (d *Downloader) Download(ctx context.Context, job Job) ([]string, error) {
 			}
 		}
 
-		paths, err := d.attempt(ctx, job)
+		files, err := d.attempt(ctx, job)
 		if err == nil {
-			return paths, nil
+			return files, nil
 		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -115,7 +132,7 @@ func (d *Downloader) Download(ctx context.Context, job Job) ([]string, error) {
 }
 
 // attempt runs one resolve-and-transfer cycle.
-func (d *Downloader) attempt(ctx context.Context, job Job) ([]string, error) {
+func (d *Downloader) attempt(ctx context.Context, job Job) ([]OutputFile, error) {
 	// A playlist has no single file behind it.
 	if job.Source == scraper.SourceHLS {
 		return d.assembleHLS(ctx, job)
@@ -125,7 +142,7 @@ func (d *Downloader) attempt(ctx context.Context, job Job) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []string{path}, nil
+	return wholeFile(path), nil
 }
 
 // direct fetches a job the host serves as a file.
@@ -179,7 +196,7 @@ func (d *Downloader) direct(ctx context.Context, job Job) (string, error) {
 	final := filepath.Join(d.OutputDir, name)
 	part := final + ".part"
 
-	if d.finished(ctx, final, resp.ContentLength) {
+	if d.finished(ctx, job, final, resp.ContentLength) {
 		resp.Body.Close()
 		return final, nil
 	}
@@ -241,8 +258,8 @@ func (d *Downloader) store(ctx context.Context, job Job, resp *http.Response, na
 // embedded attaches art and chapters. Failure is non-fatal: the audio is fine.
 func (d *Downloader) embedded(ctx context.Context, job Job, path string) (string, error) {
 	if err := d.tag(ctx, job.Tags, d.embeddedChapters(), path); err != nil {
-		if d.OnCoverError != nil {
-			d.OnCoverError(filepath.Base(path), err)
+		if d.OnTagError != nil {
+			d.OnTagError(filepath.Base(path), err)
 		}
 	}
 	return path, nil
@@ -251,15 +268,16 @@ func (d *Downloader) embedded(ctx context.Context, job Job, path string) (string
 // embeddedChapters is the list to write into a file. A split run cuts on them
 // instead, and each piece is one chapter.
 func (d *Downloader) embeddedChapters() []scraper.Chapter {
-	if d.Split {
+	if d.Split || !d.EmbedChapters {
 		return nil
 	}
 	return d.Chapters
 }
 
-// finished tests for a complete download. Tagging changes a file's length, so a
-// size mismatch alone proves nothing.
-func (d *Downloader) finished(ctx context.Context, final string, advertised int64) bool {
+// finished tests for a complete download. Anything embedded rewrites the file,
+// changing its length, so a size mismatch alone proves nothing: what the run
+// would have written stands in for the size where one was written.
+func (d *Downloader) finished(ctx context.Context, job Job, final string, advertised int64) bool {
 	size := fileSize(final)
 	if size == 0 {
 		return false
@@ -267,7 +285,16 @@ func (d *Downloader) finished(ctx context.Context, final string, advertised int6
 	if advertised > 0 && size == advertised {
 		return true
 	}
-	return d.CoverPath != "" && d.hasCover(ctx, final)
+	switch {
+	case d.CoverPath != "":
+		return d.hasCover(ctx, final)
+	case job.Tags != (Tags{}):
+		return d.hasTag(ctx, final, "title")
+	case len(d.embeddedChapters()) > 0:
+		return d.hasChapters(ctx, final)
+	}
+	// Nothing was embedded, so the file is the host's bytes and no shorter.
+	return false
 }
 
 func (d *Downloader) acquire(ctx context.Context) error {

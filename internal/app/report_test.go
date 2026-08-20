@@ -28,7 +28,11 @@ func reporting(t *testing.T, results []PostResult, broken, posts int) (stdout, s
 }
 
 func saved(paths ...string) downloader.Result {
-	return downloader.Result{Job: downloader.Job{Name: "track"}, Paths: paths}
+	files := make([]downloader.OutputFile, len(paths))
+	for i, path := range paths {
+		files[i] = downloader.OutputFile{Path: path, Chapter: -1}
+	}
+	return downloader.Result{Job: downloader.Job{Name: "track"}, Files: files}
 }
 
 func lost(name string) downloader.Result {

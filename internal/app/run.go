@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -20,6 +21,11 @@ const (
 
 	imagesName   = "images"
 	chaptersName = "chapters"
+
+	// tempCoverName holds art fetched only to be embedded, removed once the
+	// post is done. It is not the name a kept cover goes by, so a run that
+	// keeps none can never delete one an earlier run left.
+	tempCoverName = ".cover"
 )
 
 // run is one Run in progress.
@@ -40,6 +46,12 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 	}
 
 	r := &run{cfg: cfg}
+	// Applying a record touches only what is already on disk, so nothing about
+	// the network is set up for it.
+	if cfg.LoadInfoJSON != "" {
+		return r.applyInfo(ctx)
+	}
+
 	if r.state, err = newState(ctx, cfg); err != nil {
 		return Summary{}, err
 	}
@@ -87,7 +99,12 @@ type plan struct {
 	chapters []scraper.Chapter
 	split    bool
 	jobs     []downloader.Job
-	lines    postLines
+
+	// tags is the post's own metadata, one per job, whatever a job embeds. The
+	// record carries it even where nothing is written into the file.
+	tags []downloader.Tags
+
+	lines postLines
 }
 
 // planAll reads every post, one at a time so a challenge is cleared in one
@@ -137,7 +154,7 @@ func (r *run) planFor(ctx context.Context, target string) (*plan, error) {
 	}
 
 	chapters := r.chaptersFor(album)
-	split := r.splitting(chapters)
+	split := r.splitting(album, chapters)
 
 	tmpl, err := templateFor(r.cfg.Template, split, len(album.Tracks))
 	if err != nil {
@@ -151,16 +168,19 @@ func (r *run) planFor(ctx context.Context, target string) (*plan, error) {
 	}
 
 	jobs := make([]downloader.Job, 0, len(album.Tracks))
+	tags := make([]downloader.Tags, 0, len(album.Tracks))
 	for i, t := range album.Tracks {
 		f := fields
 		f.Number, f.Total = i+1, len(album.Tracks)
+		full := r.tagsFor(album, t, i+1)
+		tags = append(tags, full)
 		jobs = append(jobs, downloader.Job{
 			Name:       t.Title,
 			LinkURL:    t.LinkURL,
 			Source:     t.Source,
 			Alternates: t.Alternates,
 			Referer:    album.PageURL,
-			Tags:       r.tagsFor(album, t, i+1),
+			Tags:       r.embedTags(full),
 			Fields:     f,
 		})
 	}
@@ -172,6 +192,7 @@ func (r *run) planFor(ctx context.Context, target string) (*plan, error) {
 		chapters: chapters,
 		split:    split,
 		jobs:     jobs,
+		tags:     tags,
 		lines:    linesFor(album),
 	}, nil
 }
@@ -188,8 +209,9 @@ func (r *run) runPost(ctx context.Context, prog *downloader.Progress, budget dow
 		Retries:        r.cfg.Retries,
 		Chapters:       p.chapters,
 		Split:          p.split,
+		EmbedChapters:  r.cfg.EmbedChapters,
 		OnPictureError: func(err error) { r.warnf("[warn] picture not saved: %v", err) },
-		OnCoverError:  func(name string, err error) { r.warnf("[warn] %s: %v", name, err) },
+		OnTagError:     func(name string, err error) { r.warnf("[warn] %s: %v", name, err) },
 		OnChapterDropped: func(name string, start, total time.Duration) {
 			r.warnf("[warn] chapter %s begins at %s, past the end of a %s stream; skipped",
 				name, start.Round(time.Second), total.Round(time.Second))
@@ -209,35 +231,93 @@ func (r *run) runPost(ctx context.Context, prog *downloader.Progress, budget dow
 	}
 
 	// The cover has to be on disk before the audio it is embedded in.
-	d.CoverPath = r.fetchPictures(ctx, d, prog, p)
+	pics := r.fetchPictures(ctx, d, prog, p)
+	if r.cfg.EmbedCover {
+		d.CoverPath = pics.Cover
+	}
 
-	return PostResult{Label: p.lines.label, Dir: p.dir, Results: d.Run(ctx, p.jobs)}
+	results := d.Run(ctx, p.jobs)
+
+	// A cover fetched only to be embedded was never one of the post's files.
+	if pics.Cover != "" && !r.cfg.WriteCover {
+		if err := os.Remove(pics.Cover); err != nil {
+			r.debugf("temporary cover left behind: %v", err)
+		}
+		pics.Cover = ""
+	}
+
+	r.writeSidecars(p, pics, results)
+
+	return PostResult{Label: p.lines.label, Dir: p.dir, Results: results}
 }
 
-// fetchPictures saves the cover and the gallery on one line, and returns the
-// cover the audio embeds. Best-effort.
-func (r *run) fetchPictures(ctx context.Context, d *downloader.Downloader, prog *downloader.Progress, p *plan) string {
+// fetchPictures saves the cover and the gallery on one line. Best-effort.
+func (r *run) fetchPictures(ctx context.Context, d *downloader.Downloader, prog *downloader.Progress, p *plan) downloader.Pictures {
 	coverURL, gallery := r.pictureURLs(p.album)
 	count := len(gallery)
 	if coverURL != "" {
 		count++
 	}
 	if count == 0 {
-		return ""
+		return downloader.Pictures{}
 	}
 
 	line := p.lines.line(downloader.KindImage, imagesName)
 	prog.StartUnits(line, int64(count))
 
-	pics := d.FetchPictures(ctx, coverURL, gallery, p.album.PageURL,
-		func(done int, bytes, total int64) {
-			prog.SetUnits(line.Key, int64(done))
-			prog.Update(line.Key, bytes, total)
-		})
+	pics := d.FetchPictures(ctx, downloader.PictureJob{
+		CoverURL:  coverURL,
+		CoverName: r.coverName(),
+		Gallery:   gallery,
+		Referer:   p.album.PageURL,
+	}, func(done int, bytes, total int64) {
+		prog.SetUnits(line.Key, int64(done))
+		prog.Update(line.Key, bytes, total)
+	})
 
 	r.debugf("cover: %s", orNone(pics.Cover))
 	r.debugf("gallery: %d saved", len(pics.Gallery))
-	return pics.Cover
+	return pics
+}
+
+// coverName is what the cover is called. One fetched only to be embedded is
+// removed once the post is done, so it is named apart from a cover being kept:
+// nothing the run did not write is ever deleted.
+func (r *run) coverName() string {
+	if r.cfg.WriteCover {
+		return downloader.CoverName
+	}
+	return tempCoverName
+}
+
+// writeSidecars writes what the run keeps beside the audio. Failure is reported
+// and no more: the recordings are what the run is for.
+func (r *run) writeSidecars(p *plan, pics downloader.Pictures, results []downloader.Result) {
+	if !r.cfg.WriteInfoJSON && !r.cfg.WriteNFO {
+		return
+	}
+	info := r.infoFor(p, pics, results)
+
+	switch {
+	case !r.cfg.WriteInfoJSON:
+	// A record is read back by the files it names, so one naming none is not
+	// a record at all.
+	case len(info.Tracks) == 0:
+		r.debugf("no record written: the post saved nothing to name")
+	default:
+		r.wrote(filepath.Join(p.dir, infoName(p.album)), writeInfoJSON, info)
+	}
+	if r.cfg.WriteNFO {
+		r.wrote(filepath.Join(p.dir, nfoName), writeNFO, info)
+	}
+}
+
+func (r *run) wrote(path string, write func(string, Info) error, info Info) {
+	if err := write(path, info); err != nil {
+		r.warnf("[warn] %s: %v", filepath.Base(path), err)
+		return
+	}
+	r.debugf("wrote %s", path)
 }
 
 func (r *run) reportSource(album *scraper.Album) {

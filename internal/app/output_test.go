@@ -22,31 +22,128 @@ func fields(n, total int) naming.Fields {
 }
 
 func TestCommentForCarriesTheURLAndTags(t *testing.T) {
-	album := &scraper.Album{
-		PageURL: "https://japaneseasmr.com/12345/",
-		Tags:    []string{"2024", "ASMR"},
-	}
-
 	want := "URL: https://japaneseasmr.com/12345/\nTags: 2024, ASMR"
-	if got := commentFor(album); got != want {
+	if got := commentFor("https://japaneseasmr.com/12345/", []string{"2024", "ASMR"}); got != want {
 		t.Errorf("comment = %q, want %q", got, want)
 	}
 }
 
 func TestCommentForOmitsAnEmptyTagLine(t *testing.T) {
-	album := &scraper.Album{PageURL: "https://japaneseasmr.com/12345/"}
-
-	if got, want := commentFor(album), "URL: "+album.PageURL; got != want {
+	const url = "https://japaneseasmr.com/12345/"
+	if got, want := commentFor(url, nil), "URL: "+url; got != want {
 		t.Errorf("comment = %q, want %q", got, want)
 	}
 }
 
-func TestTagsForWritesNothingWithoutMetadata(t *testing.T) {
-	r := &run{cfg: Config{NoMetadata: true}}
-	album := &scraper.Album{PageURL: "https://japaneseasmr.com/12345/", Tags: []string{"ASMR"}}
+// The post's own metadata is gathered whatever a run embeds: the record carries
+// it even where no file is written over.
+func TestTagsForIsGatheredWhateverIsEmbedded(t *testing.T) {
+	r := &run{cfg: Config{}}
+	album := &scraper.Album{
+		PageURL: "https://japaneseasmr.com/12345/",
+		Title:   "ある夏の日",
+		RJCode:  "RJ123456",
+		Tags:    []string{"ASMR"},
+	}
 
-	if got := r.tagsFor(album, scraper.Track{}, 1); got != (downloader.Tags{}) {
-		t.Errorf("tags = %+v, want none", got)
+	tags := r.tagsFor(album, scraper.Track{}, 1)
+	if tags.Title != album.Title || tags.Album != album.RJCode {
+		t.Errorf("tags = %+v, want the post's own", tags)
+	}
+	if got := r.embedTags(tags); got != (downloader.Tags{}) {
+		t.Errorf("embedded = %+v, want none without --embed-metadata", got)
+	}
+
+	r.cfg.EmbedMetadata = true
+	if got := r.embedTags(tags); got != tags {
+		t.Errorf("embedded = %+v, want the full %+v", got, tags)
+	}
+}
+
+// Chapters are read off the page whatever is done with them, so the record can
+// carry a track list a run neither embedded nor split on.
+func TestChaptersForIgnoresTheEmbedSettings(t *testing.T) {
+	r := &run{cfg: Config{Log: func(string, ...any) {}}}
+	album := &scraper.Album{
+		Tracks:   []scraper.Track{{Source: scraper.SourceHLS}},
+		Chapters: []scraper.Chapter{{Title: "はじめに"}, {Title: "耳かき"}},
+	}
+
+	if got := r.chaptersFor(album); len(got) != 2 {
+		t.Errorf("got %d chapters, want the post's 2", len(got))
+	}
+	if r.splitting(album, album.Chapters) {
+		t.Error("a run split a stream without --split-chapters")
+	}
+
+	r.cfg.SplitChapters = true
+	if !r.splitting(album, album.Chapters) {
+		t.Error("--split-chapters did not split a chaptered stream")
+	}
+}
+
+// Only a stream is cut up. A post serving its own file is downloaded whole, so
+// a track list beside one is left to --embed-chapters rather than dropped
+// between a split that never happens and a marker that was never written.
+func TestSplittingOnlyCutsAStream(t *testing.T) {
+	r := &run{cfg: Config{SplitChapters: true, Log: func(string, ...any) {}}}
+
+	album := &scraper.Album{
+		Tracks:   []scraper.Track{{Source: scraper.SourceDirect}},
+		Chapters: []scraper.Chapter{{Title: "はじめに"}, {Title: "耳かき"}},
+	}
+	if r.splitting(album, album.Chapters) {
+		t.Error("a post serving its own file was split")
+	}
+
+	album.Tracks[0].Source = scraper.SourceHLS
+	if !r.splitting(album, album.Chapters) {
+		t.Error("a stream was not split")
+	}
+}
+
+// A work already split across files has no stream to cut, whatever was asked.
+func TestChaptersForDropsThemOnAMultiFilePost(t *testing.T) {
+	r := &run{cfg: Config{SplitChapters: true, Log: func(string, ...any) {}}}
+	album := &scraper.Album{
+		Tracks:   []scraper.Track{{}, {}},
+		Chapters: []scraper.Chapter{{Title: "はじめに"}},
+	}
+
+	chapters := r.chaptersFor(album)
+	if chapters != nil {
+		t.Errorf("got %d chapters, want none", len(chapters))
+	}
+	if r.splitting(album, chapters) {
+		t.Error("a post already split across files was split again")
+	}
+}
+
+func TestPictureURLsFollowTheSettings(t *testing.T) {
+	album := &scraper.Album{
+		CoverURL:  "https://cdn/cover.jpg",
+		ImageURLs: []string{"https://cdn/cover.jpg", "https://cdn/1.jpg"},
+	}
+
+	for _, tc := range []struct {
+		name    string
+		cfg     Config
+		cover   string
+		gallery int
+	}{
+		{"nothing asked for", Config{}, "", 0},
+		{"kept", Config{WriteCover: true}, album.CoverURL, 0},
+		{"embedded only", Config{EmbedCover: true}, album.CoverURL, 0},
+		{"gallery", Config{WriteImages: true}, "", 1},
+	} {
+		r := &run{cfg: tc.cfg}
+		cover, gallery := r.pictureURLs(album)
+		if cover != tc.cover {
+			t.Errorf("%s: cover = %q, want %q", tc.name, cover, tc.cover)
+		}
+		if len(gallery) != tc.gallery {
+			t.Errorf("%s: %d gallery pictures, want %d", tc.name, len(gallery), tc.gallery)
+		}
 	}
 }
 

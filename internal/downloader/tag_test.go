@@ -107,7 +107,7 @@ func TestNothingToTagSurvivesTheCounters(t *testing.T) {
 // already carries the order, unlike the filename or an embedded chapter label.
 func TestPieceTagsTitleIsTheChapter(t *testing.T) {
 	base := Tags{Title: "ある夏の日", Album: "RJ1", Track: 1, TrackTotal: 1, Disc: 1, DiscTotal: 1}
-	got := pieceTags(base, "耳かき", 3, 12)
+	got := PieceTags(base, "耳かき", 3, 12)
 
 	if got.Title != "耳かき" {
 		t.Errorf("Title = %q, want %q", got.Title, "耳かき")
@@ -123,9 +123,10 @@ func TestPieceTagsTitleIsTheChapter(t *testing.T) {
 	}
 }
 
-// --no-metadata must stay off, not acquire a title through the split.
+// A run without --embed-metadata must stay that way, not acquire a title
+// through the split.
 func TestPieceTagsStayEmptyWhenTaggingIsOff(t *testing.T) {
-	if got := pieceTags(Tags{}, "耳かき", 3, 12); got != (Tags{}) {
+	if got := PieceTags(Tags{}, "耳かき", 3, 12); got != (Tags{}) {
 		t.Errorf("pieceTags = %+v, want an empty Tags", got)
 	}
 }

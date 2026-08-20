@@ -6,6 +6,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/EagleStelle/jasmr-dl/internal/scraper"
 )
@@ -104,6 +105,16 @@ func (d *Downloader) tagging(tags Tags, next int, muxer, chapMeta string) (input
 // nothingToTag reports whether a file would be rewritten for no reason.
 func (d *Downloader) nothingToTag(tags Tags, chapters []scraper.Chapter) bool {
 	return d.CoverPath == "" && len(chapters) == 0 && tags == (Tags{})
+}
+
+// Retag writes art, chapters and metadata into a file already on disk. Unlike
+// a download's own tagging it refuses a container it cannot write, since
+// rewriting that file is the whole of what the caller asked for.
+func (d *Downloader) Retag(ctx context.Context, tags Tags, chapters []scraper.Chapter, audio string) error {
+	if _, ok := coverMuxers[extOf(audio)]; !ok {
+		return fmt.Errorf("nothing can be written into a %s file", strings.TrimPrefix(extOf(audio), "."))
+	}
+	return d.tag(ctx, tags, chapters, audio)
 }
 
 // tag attaches art, chapters and metadata to a finished file, rewriting it.

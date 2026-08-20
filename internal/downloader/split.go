@@ -17,7 +17,7 @@ import (
 const assemblingName = ".assembling" + hlsOutputExt
 
 // splitStream assembles the stream, then writes one file per chapter.
-func (d *Downloader) splitStream(ctx context.Context, job Job, tools ffmpegPair) ([]string, error) {
+func (d *Downloader) splitStream(ctx context.Context, job Job, tools ffmpegPair) ([]OutputFile, error) {
 	pieces := d.piecePaths(job.Fields)
 	if done, ok := finishedPieces(pieces); ok {
 		return done, nil
@@ -46,7 +46,7 @@ func (d *Downloader) splitStream(ctx context.Context, job Job, tools ffmpegPair)
 		d.OnSplitStart(len(pieces))
 	}
 
-	var written []string
+	var written []OutputFile
 	for i, path := range pieces {
 		start, end, ok := chapterSpan(d.Chapters, i, total)
 		if ok {
@@ -54,11 +54,11 @@ func (d *Downloader) splitStream(ctx context.Context, job Job, tools ffmpegPair)
 				return nil, err
 			}
 
-			tags := pieceTags(job.Tags, d.Chapters[i].Title, i+1, len(d.Chapters))
-			if err := d.tag(ctx, tags, nil, path); err != nil && d.OnCoverError != nil {
-				d.OnCoverError(filepath.Base(path), err)
+			tags := PieceTags(job.Tags, d.Chapters[i].Title, i+1, len(d.Chapters))
+			if err := d.tag(ctx, tags, nil, path); err != nil && d.OnTagError != nil {
+				d.OnTagError(filepath.Base(path), err)
 			}
-			written = append(written, path)
+			written = append(written, OutputFile{Path: path, Chapter: i})
 		}
 		// By position, so a dropped chapter still advances.
 		if d.OnSplitProgress != nil {
@@ -105,8 +105,8 @@ func (d *Downloader) piecePaths(f naming.Fields) []string {
 	return paths
 }
 
-// pieceTags titles one chapter and numbers it within the work.
-func pieceTags(base Tags, title string, n, total int) Tags {
+// PieceTags titles one chapter and numbers it within the work.
+func PieceTags(base Tags, title string, n, total int) Tags {
 	if base == (Tags{}) {
 		return base
 	}
@@ -117,11 +117,11 @@ func pieceTags(base Tags, title string, n, total int) Tags {
 
 // finishedPieces reports the pieces already on disk, and whether a rerun can
 // stop there. A gap means the last run did not get through them all.
-func finishedPieces(pieces []string) ([]string, bool) {
-	var done []string
-	for _, path := range pieces {
+func finishedPieces(pieces []string) ([]OutputFile, bool) {
+	var done []OutputFile
+	for i, path := range pieces {
 		if fileSize(path) > 0 {
-			done = append(done, path)
+			done = append(done, OutputFile{Path: path, Chapter: i})
 		}
 	}
 	return done, len(done) == len(pieces)

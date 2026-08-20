@@ -41,12 +41,18 @@ type options struct {
 	cookieFile  string
 	browserPath string
 	showBrowser bool
-	noMetadata  bool
-	noCover    bool
-	noImages    bool
-	noChapters  bool
-	noSplit     bool
-	verbose     bool
+
+	writeInfoJSON bool
+	writeCover    bool
+	writeImages   bool
+	writeNFO      bool
+	embedMetadata bool
+	embedCover    bool
+	embedChapters bool
+	splitChapters bool
+	loadInfoJSON  string
+
+	verbose bool
 }
 
 var opts options
@@ -58,18 +64,21 @@ var rootCmd = &cobra.Command{
 		"  jasmr-dl https://japaneseasmr.com/12345/ https://japaneseasmr.com/12346/\n" +
 		"  jasmr-dl -a urls.txt\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -j 64 -N 8\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ --embed-metadata --embed-cover --write-cover\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ --split-chapters --write-images\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ --embed-metadata --write-info-json --write-nfo\n" +
+		"  jasmr-dl --load-info-json RJ123456/RJ123456.info.json\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"{circle}/{rjcode}/{number}. {chapter}.{ext}\"\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"C:/Audio/{year}/{title}/{rjcode}_{number}.{ext}\"\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"<*|{number}_{chapter} [{circle}].{ext}>\"\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -P ./out -o \"{rjcode}/{number}.{ext}\"\n" +
-		"  jasmr-dl https://japaneseasmr.com/12345/ -M -C -I\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -c C:\\path\\cookies.txt",
 	Args: cobra.ArbitraryArgs,
 	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 		return applyConfig(cmd)
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if len(args) == 0 && opts.batchFile == "" {
+		if len(args) == 0 && opts.batchFile == "" && opts.loadInfoJSON == "" {
 			return cmd.Help()
 		}
 		return runDownload(cmd, args)
@@ -103,11 +112,15 @@ func registerFlags(f *pflag.FlagSet, opts *options) {
 	f.StringVarP(&opts.cookieFile, "cookies", "c", "", "path to a cookies.txt export, kept for later runs")
 	f.StringVar(&opts.browserPath, "use-browser", "", "path to a browser executable that clears a Cloudflare challenge")
 	f.BoolVar(&opts.showBrowser, "show-browser", false, "show that browser instead of running it headless")
-	f.BoolVarP(&opts.noMetadata, "no-metadata", "M", false, "do not write title, artist or album metadata")
-	f.BoolVarP(&opts.noCover, "no-cover", "C", false, "do not embed cover art")
-	f.BoolVarP(&opts.noImages, "no-images", "I", false, "do not save the rest of the post's gallery")
-	f.BoolVarP(&opts.noChapters, "no-chapters", "H", false, "do not use the track list: no chapters, no split")
-	f.BoolVarP(&opts.noSplit, "no-split", "S", false, "do not cut a chaptered stream into one file per chapter")
+	f.BoolVar(&opts.writeInfoJSON, "write-info-json", false, "write the post's metadata and chapters to a JSON file")
+	f.BoolVar(&opts.writeCover, "write-cover", false, "save the post's cover art")
+	f.BoolVar(&opts.writeImages, "write-images", false, "save the rest of the post's gallery")
+	f.BoolVar(&opts.writeNFO, "write-nfo", false, "write an album.nfo for a media server to read")
+	f.BoolVar(&opts.embedMetadata, "embed-metadata", false, "write title, artist and album tags into each file")
+	f.BoolVar(&opts.embedCover, "embed-cover", false, "embed the cover art in each file")
+	f.BoolVar(&opts.embedChapters, "embed-chapters", false, "write the track list into the file as chapter markers")
+	f.BoolVar(&opts.splitChapters, "split-chapters", false, "cut a chaptered stream into one file per chapter")
+	f.StringVar(&opts.loadInfoJSON, "load-info-json", "", "path to a written JSON file, applied to the recordings beside it")
 	f.BoolVarP(&opts.verbose, "verbose", "v", false, "debug logging on stderr")
 
 	// --help lists flags as registered above, rather than alphabetically.

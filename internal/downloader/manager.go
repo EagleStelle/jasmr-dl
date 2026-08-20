@@ -9,11 +9,11 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Result records the outcome of one job. Paths holds more than one file where
-// a stream was split into chapters.
+// Result records the outcome of one job. Files holds more than one where a
+// stream was split into chapters.
 type Result struct {
 	Job   Job
-	Paths []string
+	Files []OutputFile
 	Err   error
 }
 
@@ -47,10 +47,10 @@ func (d *Downloader) Run(ctx context.Context, jobs []Job) []Result {
 			}
 			defer d.Budget.files.leave()
 
-			paths, err := d.Download(gctx, job)
+			files, err := d.Download(gctx, job)
 
 			mu.Lock()
-			results[i] = Result{Job: job, Paths: paths, Err: err}
+			results[i] = Result{Job: job, Files: files, Err: err}
 			mu.Unlock()
 			return nil
 		})
