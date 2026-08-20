@@ -1,10 +1,10 @@
 # jasmr-dl
 
-Download audio from [japaneseasmr.com](https://japaneseasmr.com) posts, tagged and with jacket art.
+Download audio from [japaneseasmr.com](https://japaneseasmr.com) posts, tagged and with cover art.
 
 - Downloads several posts, and every part of each one, in parallel
 - Reads a list of URLs from a file
-- Embeds jacket art and writes title, artist, circle, RJ code, date and track numbers
+- Embeds cover art and writes title, artist, circle, RJ code, date and track numbers
 - Records the post URL and its tags in the comment field
 - Cuts a chaptered stream into one file per chapter
 - Saves the post's image gallery alongside the audio
@@ -33,7 +33,7 @@ Files land under the post's RJ code:
 ```
 RJ123456/RJ123456_1.mp3
 RJ123456/RJ123456_2.mp3
-RJ123456/jacket.jpg
+RJ123456/cover.jpg
 RJ123456/images/01.jpg
 ```
 
@@ -53,7 +53,7 @@ jasmr-dl https://japaneseasmr.com/12345/ -j 64 -N 8
 Audio only:
 
 ```
-jasmr-dl https://japaneseasmr.com/12345/ -M -J -I
+jasmr-dl https://japaneseasmr.com/12345/ -M -C -I
 ```
 
 `Ctrl+C` cancels. Exit status is non-zero only when every post fails.
@@ -120,7 +120,7 @@ The default is `{rjcode}/<{rjcode}_{number}.{ext}|{number}_{chapter}.{ext}>`,
 written in the same divider syntax `-o` takes: the same directory either way, a
 leaf per shape.
 
-Jacket art and the gallery follow the audio: `jacket.jpg` beside it, the rest
+Cover art and the gallery follow the audio: `cover.jpg` beside it, the rest
 under `images/`. They come down together, on one progress line that counts both
 the pictures and their bytes.
 
@@ -193,7 +193,7 @@ The stream is cut into one file per chapter.
 | `--use-browser` | | Path to a browser executable that clears a Cloudflare challenge |
 | `--show-browser` | `false` | Show that browser instead of running it headless |
 | `-M, --no-metadata` | `false` | Do not write title, artist or album metadata |
-| `-J, --no-jacket` | `false` | Do not embed jacket art |
+| `-C, --no-cover` | `false` | Do not embed cover art |
 | `-I, --no-images` | `false` | Do not save the rest of the post's gallery |
 | `-H, --no-chapters` | `false` | Do not use the track list: no chapters, no split |
 | `-S, --no-split` | `false` | Do not cut a chaptered stream into one file per chapter |
@@ -231,9 +231,9 @@ Setting `JASMR_DL_NO_CONFIG` to any value skips both files.
 
 ## Requirements
 
-`ffmpeg` and `ffprobe` are required for jacket art, tags, and posts that serve only the site's stream. Put both on `PATH`, or beside the `jasmr-dl` binary.
+`ffmpeg` and `ffprobe` are required for cover art, tags, and posts that serve only the site's stream. Put both on `PATH`, or beside the `jasmr-dl` binary.
 
-Without them, use `-M -J -H` to download the audio untouched. Stream-only posts will not work.
+Without them, use `-M -C -H` to download the audio untouched. Stream-only posts will not work.
 
 ## Cloudflare
 

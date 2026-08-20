@@ -71,8 +71,8 @@ func counter(muxer, key, vorbisNum, vorbisTotal string, n, total int) []string {
 func (d *Downloader) tagging(tags Tags, next int, muxer, chapMeta string) (inputs, opts []string) {
 	opts = []string{"-map", "0:a"}
 
-	if d.JacketPath != "" {
-		inputs = append(inputs, "-i", d.JacketPath)
+	if d.CoverPath != "" {
+		inputs = append(inputs, "-i", d.CoverPath)
 		opts = append(opts, "-map", strconv.Itoa(next)+":v")
 		next++
 	}
@@ -82,7 +82,7 @@ func (d *Downloader) tagging(tags Tags, next int, muxer, chapMeta string) (input
 	}
 
 	opts = append(opts, "-c:a", "copy")
-	if d.JacketPath != "" {
+	if d.CoverPath != "" {
 		// Players widely ignore non-JPEG art. The two metadata values are the
 		// names the ID3 attached-picture frame goes by, not ours to rename.
 		opts = append(opts,
@@ -103,12 +103,12 @@ func (d *Downloader) tagging(tags Tags, next int, muxer, chapMeta string) (input
 
 // nothingToTag reports whether a file would be rewritten for no reason.
 func (d *Downloader) nothingToTag(tags Tags, chapters []scraper.Chapter) bool {
-	return d.JacketPath == "" && len(chapters) == 0 && tags == (Tags{})
+	return d.CoverPath == "" && len(chapters) == 0 && tags == (Tags{})
 }
 
 // tag attaches art, chapters and metadata to a finished file, rewriting it.
 func (d *Downloader) tag(ctx context.Context, tags Tags, chapters []scraper.Chapter, audio string) error {
-	muxer, ok := jacketMuxers[extOf(audio)]
+	muxer, ok := coverMuxers[extOf(audio)]
 	if !ok || d.nothingToTag(tags, chapters) {
 		return nil
 	}

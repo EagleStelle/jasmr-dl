@@ -44,15 +44,15 @@ func write(t *testing.T, path, body string) {
 }
 
 func TestConfigFileSetsFlags(t *testing.T) {
-	o, err := configured(t, "", "# a config\n\nconcurrency = 8\nno-jacket\noutput = {year}/{title}.{ext}\n")
+	o, err := configured(t, "", "# a config\n\nconcurrency = 8\nno-cover\noutput = {year}/{title}.{ext}\n")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if o.concurrency != 8 {
 		t.Errorf("concurrency = %d, want 8", o.concurrency)
 	}
-	if !o.noJacket {
-		t.Error("no-jacket was not set by a bare key")
+	if !o.noCover {
+		t.Error("no-cover was not set by a bare key")
 	}
 	if want := "{year}/{title}.{ext}"; o.outputTmpl != want {
 		t.Errorf("output = %q, want %q", o.outputTmpl, want)

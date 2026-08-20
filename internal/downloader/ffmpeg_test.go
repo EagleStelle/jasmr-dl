@@ -30,7 +30,7 @@ func TestPairBesideBinary(t *testing.T) {
 		ffprobe: filepath.Join(dir, "ffprobe"+ext),
 	}
 
-	// ffmpeg alone must not satisfy the search, or the run fails later at jacket
+	// ffmpeg alone must not satisfy the search, or the run fails later at cover
 	// art with the download already spent.
 	plant(t, want.ffmpeg)
 	if _, err := pairBesideBinary(); err == nil {

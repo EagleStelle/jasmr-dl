@@ -152,23 +152,23 @@ func titleFor(album *scraper.Album, track scraper.Track) string {
 	return album.Title + " - " + track.Name
 }
 
-// pictureURLs splits a post's pictures into the jacket the audio embeds and the
+// pictureURLs splits a post's pictures into the cover the audio embeds and the
 // gallery behind it, dropping whatever the settings turn off.
-func (r *run) pictureURLs(album *scraper.Album) (jacket string, gallery []string) {
-	if !r.cfg.NoJacket {
-		jacket = album.JacketURL
+func (r *run) pictureURLs(album *scraper.Album) (cover string, gallery []string) {
+	if !r.cfg.NoCover {
+		cover = album.CoverURL
 	}
 	if r.cfg.NoImages {
-		return jacket, nil
+		return cover, nil
 	}
 
 	for _, u := range album.ImageURLs {
-		// The jacket already sits beside the audio. Dropping it here rather
+		// The cover already sits beside the audio. Dropping it here rather
 		// than counting on it being first keeps the numbering the same on a
 		// post that opens its gallery with something else.
-		if u != album.JacketURL {
+		if u != album.CoverURL {
 			gallery = append(gallery, u)
 		}
 	}
-	return jacket, gallery
+	return cover, gallery
 }

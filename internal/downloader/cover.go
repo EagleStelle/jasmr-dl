@@ -23,8 +23,8 @@ const (
 	// clear of anything the gallery legitimately holds.
 	maxImageBytes = 64 << 20
 
-	// jacketName is the album art, kept beside the audio it is embedded in.
-	jacketName = "jacket"
+	// coverName is the album art, kept beside the audio it is embedded in.
+	coverName = "cover"
 
 	// imagesDirName holds the rest of the gallery, which no file carries.
 	imagesDirName = "images"
@@ -37,7 +37,7 @@ const (
 )
 
 // Extensions whose muxer can carry art and chapters.
-var jacketMuxers = map[string]string{
+var coverMuxers = map[string]string{
 	".m4a":  "ipod",
 	".mp3":  "mp3",
 	".flac": "flac",
@@ -45,8 +45,8 @@ var jacketMuxers = map[string]string{
 
 // Pictures is what a post carries beside its audio.
 type Pictures struct {
-	// Jacket is the art the audio embeds, empty where none came down.
-	Jacket string
+	// Cover is the art the audio embeds, empty where none came down.
+	Cover string
 
 	// Gallery is everything else, in page order.
 	Gallery []string
@@ -57,16 +57,16 @@ type picture struct {
 	url    string
 	dir    string
 	name   string
-	jacket bool
+	cover bool
 }
 
-// FetchPictures saves the jacket beside the audio and the gallery under
+// FetchPictures saves the cover beside the audio and the gallery under
 // images/, every picture in flight together up to what the budget allows.
 // onProgress reports the pictures finished, the bytes on disk and the total
 // those project to. One that will not come down goes to OnPictureError and is
 // skipped, since pictures are not what the run is for.
-func (d *Downloader) FetchPictures(ctx context.Context, jacketURL string, gallery []string, referer string, onProgress func(done int, bytes, total int64)) Pictures {
-	targets := pictureTargets(jacketURL, gallery, d.OutputDir)
+func (d *Downloader) FetchPictures(ctx context.Context, coverURL string, gallery []string, referer string, onProgress func(done int, bytes, total int64)) Pictures {
+	targets := pictureTargets(coverURL, gallery, d.OutputDir)
 	if len(targets) == 0 {
 		return Pictures{}
 	}
@@ -133,8 +133,8 @@ func (d *Downloader) FetchPictures(ctx context.Context, jacketURL string, galler
 	for i, p := range targets {
 		switch {
 		case paths[i] == "":
-		case p.jacket:
-			out.Jacket = paths[i]
+		case p.cover:
+			out.Cover = paths[i]
 		default:
 			out.Gallery = append(out.Gallery, paths[i])
 		}
@@ -142,12 +142,12 @@ func (d *Downloader) FetchPictures(ctx context.Context, jacketURL string, galler
 	return out
 }
 
-// pictureTargets names every picture a post opens. The jacket leads, so a run
+// pictureTargets names every picture a post opens. The cover leads, so a run
 // that saves nothing else still has its art.
-func pictureTargets(jacketURL string, gallery []string, dir string) []picture {
+func pictureTargets(coverURL string, gallery []string, dir string) []picture {
 	var targets []picture
-	if jacketURL != "" {
-		targets = append(targets, picture{url: jacketURL, dir: dir, name: jacketName, jacket: true})
+	if coverURL != "" {
+		targets = append(targets, picture{url: coverURL, dir: dir, name: coverName, cover: true})
 	}
 
 	imagesDir := filepath.Join(dir, imagesDirName)
@@ -261,8 +261,8 @@ func (d *Downloader) probeDuration(ctx context.Context, audio string) (time.Dura
 	return time.Duration(secs * float64(time.Second)), nil
 }
 
-// hasJacket stops a rerun re-downloading a tagged file, whose length changed.
-func (d *Downloader) hasJacket(ctx context.Context, audio string) bool {
+// hasCover stops a rerun re-downloading a tagged file, whose length changed.
+func (d *Downloader) hasCover(ctx context.Context, audio string) bool {
 	out, err := d.ffprobe(ctx,
 		"-select_streams", "v",
 		"-show_entries", "stream=codec_type",

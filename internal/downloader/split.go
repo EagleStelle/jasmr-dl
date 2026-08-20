@@ -55,8 +55,8 @@ func (d *Downloader) splitStream(ctx context.Context, job Job, tools ffmpegPair)
 			}
 
 			tags := pieceTags(job.Tags, d.Chapters[i].Title, i+1, len(d.Chapters))
-			if err := d.tag(ctx, tags, nil, path); err != nil && d.OnJacketError != nil {
-				d.OnJacketError(filepath.Base(path), err)
+			if err := d.tag(ctx, tags, nil, path); err != nil && d.OnCoverError != nil {
+				d.OnCoverError(filepath.Base(path), err)
 			}
 			written = append(written, path)
 		}

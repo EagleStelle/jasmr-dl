@@ -66,7 +66,7 @@ func newState(ctx context.Context, cfg Config) (*state, error) {
 func (s *state) transport() (*http.Client, string) { return s.client, s.userAgent }
 
 // use rebuilds the client around a set of cookies, keeping one connection pool
-// across the page fetch, the jacket and every track.
+// across the page fetch, the cover and every track.
 func (s *state) use(cookies []downloader.Cookie) error {
 	if len(cookies) == 0 {
 		s.client = downloader.NewClient(nil)

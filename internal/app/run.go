@@ -128,7 +128,7 @@ func (r *run) planFor(ctx context.Context, target string) (*plan, error) {
 	r.state.keep(ctx, r)
 	r.reportSource(album)
 
-	r.debugf("jacket: %s", orNone(album.JacketURL))
+	r.debugf("cover: %s", orNone(album.CoverURL))
 	r.debugf("gallery: %d images", len(album.ImageURLs))
 	r.debugf("album: %s, circle: %s, date: %s", orNone(album.RJCode), orNone(album.Circle), orNone(album.Date))
 	r.debugf("chapters: %d", len(album.Chapters))
@@ -189,7 +189,7 @@ func (r *run) runPost(ctx context.Context, prog *downloader.Progress, budget dow
 		Chapters:       p.chapters,
 		Split:          p.split,
 		OnPictureError: func(err error) { r.warnf("[warn] picture not saved: %v", err) },
-		OnJacketError:  func(name string, err error) { r.warnf("[warn] %s: %v", name, err) },
+		OnCoverError:  func(name string, err error) { r.warnf("[warn] %s: %v", name, err) },
 		OnChapterDropped: func(name string, start, total time.Duration) {
 			r.warnf("[warn] chapter %s begins at %s, past the end of a %s stream; skipped",
 				name, start.Round(time.Second), total.Round(time.Second))
@@ -208,18 +208,18 @@ func (r *run) runPost(ctx context.Context, prog *downloader.Progress, budget dow
 		},
 	}
 
-	// The jacket has to be on disk before the audio it is embedded in.
-	d.JacketPath = r.fetchPictures(ctx, d, prog, p)
+	// The cover has to be on disk before the audio it is embedded in.
+	d.CoverPath = r.fetchPictures(ctx, d, prog, p)
 
 	return PostResult{Label: p.lines.label, Dir: p.dir, Results: d.Run(ctx, p.jobs)}
 }
 
-// fetchPictures saves the jacket and the gallery on one line, and returns the
-// jacket the audio embeds. Best-effort.
+// fetchPictures saves the cover and the gallery on one line, and returns the
+// cover the audio embeds. Best-effort.
 func (r *run) fetchPictures(ctx context.Context, d *downloader.Downloader, prog *downloader.Progress, p *plan) string {
-	jacketURL, gallery := r.pictureURLs(p.album)
+	coverURL, gallery := r.pictureURLs(p.album)
 	count := len(gallery)
-	if jacketURL != "" {
+	if coverURL != "" {
 		count++
 	}
 	if count == 0 {
@@ -229,15 +229,15 @@ func (r *run) fetchPictures(ctx context.Context, d *downloader.Downloader, prog 
 	line := p.lines.line(downloader.KindImage, imagesName)
 	prog.StartUnits(line, int64(count))
 
-	pics := d.FetchPictures(ctx, jacketURL, gallery, p.album.PageURL,
+	pics := d.FetchPictures(ctx, coverURL, gallery, p.album.PageURL,
 		func(done int, bytes, total int64) {
 			prog.SetUnits(line.Key, int64(done))
 			prog.Update(line.Key, bytes, total)
 		})
 
-	r.debugf("jacket: %s", orNone(pics.Jacket))
+	r.debugf("cover: %s", orNone(pics.Cover))
 	r.debugf("gallery: %d saved", len(pics.Gallery))
-	return pics.Jacket
+	return pics.Cover
 }
 
 func (r *run) reportSource(album *scraper.Album) {

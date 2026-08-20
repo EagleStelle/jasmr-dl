@@ -114,18 +114,18 @@ func pictureServer(t *testing.T, size int) *httptest.Server {
 	return ts
 }
 
-// The jacket and the gallery share one line, so one call has to place both:
-// the jacket beside the audio, everything else numbered under images/.
-func TestFetchPicturesSavesTheJacketBesideTheGallery(t *testing.T) {
+// The cover and the gallery share one line, so one call has to place both:
+// the cover beside the audio, everything else numbered under images/.
+func TestFetchPicturesSavesTheCoverBesideTheGallery(t *testing.T) {
 	ts := pictureServer(t, 2048)
 
 	dir := t.TempDir()
 	gallery := []string{ts.URL + "/1.jpg", ts.URL + "/2.jpg", ts.URL + "/3.jpg"}
 	d := pictureFetcher(ts, dir, nil)
-	pics := d.FetchPictures(context.Background(), ts.URL+"/jacket.jpg", gallery, ts.URL, nil)
+	pics := d.FetchPictures(context.Background(), ts.URL+"/cover.jpg", gallery, ts.URL, nil)
 
-	if got, want := pics.Jacket, filepath.Join(dir, jacketName+".png"); got != want {
-		t.Errorf("jacket at %q, want %q", got, want)
+	if got, want := pics.Cover, filepath.Join(dir, coverName+".png"); got != want {
+		t.Errorf("cover at %q, want %q", got, want)
 	}
 	if len(pics.Gallery) != len(gallery) {
 		t.Fatalf("%d gallery pictures, want %d", len(pics.Gallery), len(gallery))

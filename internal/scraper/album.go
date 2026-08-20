@@ -16,14 +16,14 @@ const (
 type Album struct {
 	PageURL   string
 	Title     string
-	JacketURL string
+	CoverURL string
 	Artists   string
 	Circle    string
 	RJCode    string
 	Date      string
 	Tracks    []Track
 
-	// ImageURLs is the post's gallery in page order, the jacket first.
+	// ImageURLs is the post's gallery in page order, the cover first.
 	ImageURLs []string
 
 	// Tags is the post's tag list in page order.

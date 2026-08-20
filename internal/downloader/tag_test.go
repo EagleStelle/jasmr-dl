@@ -77,19 +77,19 @@ func TestCounterWithoutTotal(t *testing.T) {
 	}
 }
 
-func TestTaggingPadsJacketToSquareWithBlack(t *testing.T) {
-	d := Downloader{JacketPath: "jacket.png"}
+func TestTaggingPadsCoverToSquareWithBlack(t *testing.T) {
+	d := Downloader{CoverPath: "cover.png"}
 	_, opts := d.tagging(Tags{}, 1, "mp3", "")
 
 	for i := 0; i+1 < len(opts); i++ {
 		if opts[i] == "-vf" {
 			if got, want := opts[i+1], `pad=max(iw\,ih):max(iw\,ih):(ow-iw)/2:(oh-ih)/2:color=black`; got != want {
-				t.Errorf("jacket filter = %q, want %q", got, want)
+				t.Errorf("cover filter = %q, want %q", got, want)
 			}
 			return
 		}
 	}
-	t.Fatal("jacket tagging has no square padding filter")
+	t.Fatal("cover tagging has no square padding filter")
 }
 
 // A run with nothing to write must not rewrite the file through ffmpeg.

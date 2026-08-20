@@ -42,7 +42,7 @@ type options struct {
 	browserPath string
 	showBrowser bool
 	noMetadata  bool
-	noJacket    bool
+	noCover    bool
 	noImages    bool
 	noChapters  bool
 	noSplit     bool
@@ -62,7 +62,7 @@ var rootCmd = &cobra.Command{
 		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"C:/Audio/{year}/{title}/{rjcode}_{number}.{ext}\"\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"<*|{number}_{chapter} [{circle}].{ext}>\"\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -P ./out -o \"{rjcode}/{number}.{ext}\"\n" +
-		"  jasmr-dl https://japaneseasmr.com/12345/ -M -J -I\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ -M -C -I\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -c C:\\path\\cookies.txt",
 	Args: cobra.ArbitraryArgs,
 	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
@@ -104,7 +104,7 @@ func registerFlags(f *pflag.FlagSet, opts *options) {
 	f.StringVar(&opts.browserPath, "use-browser", "", "path to a browser executable that clears a Cloudflare challenge")
 	f.BoolVar(&opts.showBrowser, "show-browser", false, "show that browser instead of running it headless")
 	f.BoolVarP(&opts.noMetadata, "no-metadata", "M", false, "do not write title, artist or album metadata")
-	f.BoolVarP(&opts.noJacket, "no-jacket", "J", false, "do not embed jacket art")
+	f.BoolVarP(&opts.noCover, "no-cover", "C", false, "do not embed cover art")
 	f.BoolVarP(&opts.noImages, "no-images", "I", false, "do not save the rest of the post's gallery")
 	f.BoolVarP(&opts.noChapters, "no-chapters", "H", false, "do not use the track list: no chapters, no split")
 	f.BoolVarP(&opts.noSplit, "no-split", "S", false, "do not cut a chaptered stream into one file per chapter")

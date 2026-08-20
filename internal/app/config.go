@@ -59,7 +59,7 @@ type Config struct {
 	Retries int
 
 	NoMetadata bool
-	NoJacket   bool
+	NoCover   bool
 	NoImages   bool
 	NoChapters bool
 	NoSplit    bool
