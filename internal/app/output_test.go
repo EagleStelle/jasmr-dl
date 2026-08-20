@@ -4,7 +4,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/EagleStelle/jasmr-dl/internal/downloader"
 	"github.com/EagleStelle/jasmr-dl/internal/naming"
+	"github.com/EagleStelle/jasmr-dl/internal/scraper"
 )
 
 func fields(n, total int) naming.Fields {
@@ -16,6 +18,35 @@ func fields(n, total int) naming.Fields {
 		Ext:     "mp3",
 		Number:  n,
 		Total:   total,
+	}
+}
+
+func TestCommentForCarriesTheURLAndTags(t *testing.T) {
+	album := &scraper.Album{
+		PageURL: "https://japaneseasmr.com/12345/",
+		Tags:    []string{"2024", "ASMR"},
+	}
+
+	want := "URL: https://japaneseasmr.com/12345/\nTags: 2024, ASMR"
+	if got := commentFor(album); got != want {
+		t.Errorf("comment = %q, want %q", got, want)
+	}
+}
+
+func TestCommentForOmitsAnEmptyTagLine(t *testing.T) {
+	album := &scraper.Album{PageURL: "https://japaneseasmr.com/12345/"}
+
+	if got, want := commentFor(album), "URL: "+album.PageURL; got != want {
+		t.Errorf("comment = %q, want %q", got, want)
+	}
+}
+
+func TestTagsForWritesNothingWithoutMetadata(t *testing.T) {
+	r := &run{cfg: Config{NoMetadata: true}}
+	album := &scraper.Album{PageURL: "https://japaneseasmr.com/12345/", Tags: []string{"ASMR"}}
+
+	if got := r.tagsFor(album, scraper.Track{}, 1); got != (downloader.Tags{}) {
+		t.Errorf("tags = %+v, want none", got)
 	}
 }
 

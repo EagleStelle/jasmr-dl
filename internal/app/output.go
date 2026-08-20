@@ -127,12 +127,22 @@ func (r *run) tagsFor(album *scraper.Album, track scraper.Track, n int) download
 		Album:       album.RJCode,
 		Date:        album.Date,
 		Genre:       genre,
-		Comment:     album.PageURL,
+		Comment:     commentFor(album),
 		Track:       n,
 		TrackTotal:  len(album.Tracks),
 		Disc:        1,
 		DiscTotal:   1,
 	}
+}
+
+// commentFor packs what no tag of its own carries into the comment field, one
+// key per line.
+func commentFor(album *scraper.Album) string {
+	lines := []string{"URL: " + album.PageURL}
+	if len(album.Tags) > 0 {
+		lines = append(lines, "Tags: "+strings.Join(album.Tags, ", "))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func titleFor(album *scraper.Album, track scraper.Track) string {

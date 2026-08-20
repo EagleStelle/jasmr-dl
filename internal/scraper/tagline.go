@@ -9,8 +9,11 @@ import (
 
 const (
 	taglineSelector = "p.entry-tagline"
-	ratingPath      = "/category/rating/"
-	isoDate         = "2006-01-02"
+	// tagsSelector is the tag line under the post. Its anchors carry rel="tag",
+	// where a category anchor carries rel="category tag".
+	tagsSelector = `p.post-tags a[rel="tag"]`
+	ratingPath   = "/category/rating/"
+	isoDate      = "2006-01-02"
 )
 
 // notCircle are the categories describing a post's audience, not its author.
@@ -54,6 +57,24 @@ func isNotCircle(label string) bool {
 		}
 	}
 	return false
+}
+
+// extractTags lists the post's tags in page order. A post carries the same tag
+// under both its English and Japanese label, so each label is kept once.
+func extractTags(doc *goquery.Document) []string {
+	var (
+		tags []string
+		seen = map[string]bool{}
+	)
+	doc.Find(tagsSelector).Each(func(_ int, a *goquery.Selection) {
+		label := strings.TrimSpace(a.Text())
+		if label == "" || seen[label] {
+			return
+		}
+		seen[label] = true
+		tags = append(tags, label)
+	})
+	return tags
 }
 
 // extractDate reads the datetime attribute, not the text beside it.

@@ -5,6 +5,7 @@ Download audio from [japaneseasmr.com](https://japaneseasmr.com) posts, tagged a
 - Downloads several posts, and every part of each one, in parallel
 - Reads a list of URLs from a file
 - Embeds jacket art and writes title, artist, circle, RJ code, date and track numbers
+- Records the post URL and its tags in the comment field
 - Cuts a chaptered stream into one file per chapter
 - Saves the post's image gallery alongside the audio
 - Handles posts that serve only the site's stream

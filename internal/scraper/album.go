@@ -26,6 +26,9 @@ type Album struct {
 	// ImageURLs is the post's gallery in page order, the jacket first.
 	ImageURLs []string
 
+	// Tags is the post's tag list in page order.
+	Tags []string
+
 	// Chapters is present only where one stream holds the whole work.
 	Chapters []Chapter
 }

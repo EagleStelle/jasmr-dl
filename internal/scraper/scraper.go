@@ -47,6 +47,7 @@ func (s *Scraper) Album(ctx context.Context, pageURL string) (*Album, error) {
 		Tracks:    directTracks(doc, base),
 		Chapters:  extractChapters(doc),
 		ImageURLs: extractImages(doc, base),
+		Tags:      extractTags(doc),
 	}
 	if len(album.Tracks) == 0 {
 		return nil, fmt.Errorf("no audio in any player on %s", pageURL)
