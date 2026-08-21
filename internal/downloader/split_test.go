@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/EagleStelle/jasmr-dl/internal/metadata"
 	"github.com/EagleStelle/jasmr-dl/internal/naming"
 	"github.com/EagleStelle/jasmr-dl/internal/scraper"
 )
@@ -71,7 +72,7 @@ func TestPiecePathsNameEveryChapter(t *testing.T) {
 		},
 	}
 
-	got := d.piecePaths(naming.Fields{Title: "work", RJCode: "RJ1"})
+	got := d.piecePaths(naming.Fields{Fields: metadata.Fields{Title: "work", RJCode: "RJ1"}})
 	want := []string{
 		filepath.Join("out", "1_はじめに.m4a"),
 		filepath.Join("out", "2_耳かき.m4a"),
@@ -98,7 +99,7 @@ func TestPiecePathsHonourTheTemplate(t *testing.T) {
 		})
 	}
 
-	got := d.piecePaths(naming.Fields{RJCode: "RJ1"})
+	got := d.piecePaths(naming.Fields{Fields: metadata.Fields{RJCode: "RJ1"}})
 	if want := filepath.Join("out", "01 - c.m4a"); got[0] != want {
 		t.Errorf("first = %q, want %q", got[0], want)
 	}

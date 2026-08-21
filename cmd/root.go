@@ -32,7 +32,9 @@ func resolveVersion() string {
 // options is every flag, gathered rather than scattered across package globals
 // so nothing downstream reads one.
 type options struct {
-	outputTmpl  string
+	outputTmpl    string
+	parseMetadata []string
+
 	basePath    string
 	batchFile   string
 	concurrency int
@@ -67,6 +69,7 @@ var rootCmd = &cobra.Command{
 		"  jasmr-dl https://japaneseasmr.com/12345/ --embed-metadata --embed-cover --write-cover\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ --split-chapters --write-images\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ --embed-metadata --write-info-json --write-nfo\n" +
+		"  jasmr-dl https://japaneseasmr.com/12345/ --embed-metadata --parse-metadata \"{title}:{artist} - {title}\"\n" +
 		"  jasmr-dl --load-info-json RJ123456/RJ123456.info.json\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"{circle}/{rjcode}/{number}. {chapter}.{ext}\"\n" +
 		"  jasmr-dl https://japaneseasmr.com/12345/ -o \"C:/Audio/{year}/{title}/{rjcode}_{number}.{ext}\"\n" +
@@ -104,6 +107,8 @@ func init() {
 func registerFlags(f *pflag.FlagSet, opts *options) {
 	f.StringVarP(&opts.outputTmpl, "output", "o", "",
 		"template naming each file and the directories above it")
+	f.StringArrayVar(&opts.parseMetadata, "parse-metadata", nil,
+		"rewrite the post's metadata, as FROM:TO; repeatable")
 	f.StringVarP(&opts.basePath, "paths", "P", "", "directory everything is written under")
 	f.StringVarP(&opts.batchFile, "batch-file", "a", "", "path to a URL list, one per line, or - for stdin")
 	f.IntVarP(&opts.concurrency, "concurrency", "N", 3, "posts, and files within them, downloaded at once")
@@ -126,15 +131,26 @@ func registerFlags(f *pflag.FlagSet, opts *options) {
 	// --help lists flags as registered above, rather than alphabetically.
 	f.SortFlags = false
 
-	f.VisitAll(func(fl *pflag.Flag) { fl.Value = upperType{fl.Value} })
+	f.VisitAll(func(fl *pflag.Flag) {
+		// A repeatable flag given nothing defaults to nothing, which pflag
+		// would otherwise spell out as "[]".
+		if fl.DefValue == "[]" {
+			fl.DefValue = ""
+		}
+		fl.Value = upperType{fl.Value}
+	})
 }
 
 type upperType struct{ pflag.Value }
 
 func (u upperType) Type() string {
-	t := u.Value.Type()
-	if t == "bool" {
+	switch t := u.Value.Type(); t {
+	case "bool":
 		return t
+	case "stringArray":
+		// A repeatable flag still takes one value at a time.
+		return "STRING"
+	default:
+		return strings.ToUpper(t)
 	}
-	return strings.ToUpper(t)
 }

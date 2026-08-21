@@ -3,6 +3,8 @@ package app
 import (
 	"encoding/xml"
 	"os"
+
+	"github.com/EagleStelle/jasmr-dl/internal/metadata"
 )
 
 // nfoName is the file Kodi, Jellyfin and Emby all read a music folder's details
@@ -57,10 +59,10 @@ type nfoTrack struct {
 // nfoFor turns the record into what a media server reads.
 func nfoFor(info Info) nfoAlbum {
 	plot := commentFor(info.URL, info.Tags)
-	year, _, _ := splitDate(info.Date)
+	year, _, _ := metadata.SplitDate(info.Date)
 
 	a := nfoAlbum{
-		Title:       albumFor(info.Title, info.RJCode),
+		Title:       info.meta().AlbumName(),
 		ArtistDesc:  info.Artist,
 		Artist:      info.Artist,
 		AlbumArtist: info.Circle,

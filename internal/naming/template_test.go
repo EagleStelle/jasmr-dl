@@ -4,19 +4,18 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/EagleStelle/jasmr-dl/internal/metadata"
 )
 
 func album() Fields {
-	return Fields{
+	return Fields{Fields: metadata.Fields{
 		Title:  "ある夏の日",
 		RJCode: "RJ123456",
 		Circle: "Some Circle",
 		Artist: "Some CV",
 		Date:   "2024-07-02",
-		Year:   "2024",
-		Month:  "07",
-		Day:    "02",
-	}
+	}}
 }
 
 func TestParseRejectsFileFieldInDirectory(t *testing.T) {
@@ -54,7 +53,7 @@ func TestParseAcceptsALiteralExtension(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := tmpl.File(Fields{Title: "a"}), "a.mp3"; got != want {
+	if got, want := tmpl.File(Fields{Fields: metadata.Fields{Title: "a"}}), "a.mp3"; got != want {
 		t.Errorf("File = %q, want %q", got, want)
 	}
 }
@@ -66,7 +65,7 @@ func TestTrailingSeparatorNamesTheLastSegment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := Fields{RJCode: "RJ1", Title: "a", Ext: "mp3"}
+	f := Fields{Fields: metadata.Fields{RJCode: "RJ1", Title: "a"}, Ext: "mp3"}
 	if got, want := tmpl.Dir(f), "RJ1"; got != want {
 		t.Errorf("Dir = %q, want %q", got, want)
 	}
@@ -132,7 +131,7 @@ func TestEmptyFieldStandsIn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := Fields{RJCode: "RJ1", Title: "a", Ext: "mp3"}
+	f := Fields{Fields: metadata.Fields{RJCode: "RJ1", Title: "a"}, Ext: "mp3"}
 	if got, want := tmpl.Dir(f), filepath.Join(Unknown, "RJ1"); got != want {
 		t.Errorf("Dir = %q, want %q", got, want)
 	}
@@ -159,7 +158,7 @@ func TestLiteralDirSegmentIsKept(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := Fields{Title: "a", Ext: "mp3"}
+	f := Fields{Fields: metadata.Fields{Title: "a"}, Ext: "mp3"}
 	if got, want := tmpl.Dir(f), "out"; got != want {
 		t.Errorf("Dir = %q, want %q", got, want)
 	}
@@ -174,7 +173,7 @@ func TestFieldValuesCannotTraverse(t *testing.T) {
 	}
 
 	f := Fields{
-		Title:   "../../etc",
+		Fields:  metadata.Fields{Title: "../../etc"},
 		Chapter: "../../../evil",
 		Ext:     "mp3",
 	}
@@ -196,7 +195,7 @@ func TestDotOnlyValueKeepsItsLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := Fields{Title: "..", RJCode: "RJ1", Ext: "mp3"}
+	f := Fields{Fields: metadata.Fields{Title: "..", RJCode: "RJ1"}, Ext: "mp3"}
 	if got, want := tmpl.Dir(f), "untitled"; got != want {
 		t.Errorf("Dir = %q, want %q", got, want)
 	}
@@ -208,7 +207,7 @@ func TestRootedTemplateStaysRooted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := Fields{RJCode: "RJ1", Title: "a", Ext: "mp3"}
+	f := Fields{Fields: metadata.Fields{RJCode: "RJ1", Title: "a"}, Ext: "mp3"}
 	if got, want := filepath.ToSlash(tmpl.Dir(f)), "/srv/audio/RJ1"; got != want {
 		t.Errorf("Dir = %q, want %q", got, want)
 	}
@@ -220,7 +219,7 @@ func TestWindowsSeparatorsAndVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := Fields{RJCode: "RJ1", Title: "a", Ext: "mp3"}
+	f := Fields{Fields: metadata.Fields{RJCode: "RJ1", Title: "a"}, Ext: "mp3"}
 	if got, want := filepath.ToSlash(tmpl.Dir(f)), "F:/Music/RJ1"; got != want {
 		t.Errorf("Dir = %q, want %q", got, want)
 	}
@@ -241,12 +240,12 @@ func TestCounterRendering(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	set := Fields{Number: 3, Total: 12, Title: "a", Ext: "mp3"}
+	set := Fields{Fields: metadata.Fields{Title: "a"}, Number: 3, Total: 12, Ext: "mp3"}
 	if got, want := tmpl.File(set), "3of12_a.mp3"; got != want {
 		t.Errorf("File = %q, want %q", got, want)
 	}
 
-	unset := Fields{Title: "a", Ext: "mp3"}
+	unset := Fields{Fields: metadata.Fields{Title: "a"}, Ext: "mp3"}
 	if got, want := tmpl.File(unset), Unknown+"of"+Unknown+"_a.mp3"; got != want {
 		t.Errorf("File = %q, want %q", got, want)
 	}
@@ -269,7 +268,7 @@ func TestFieldNamesAreCaseInsensitive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := Fields{RJCode: "RJ1", Title: "a", Ext: "mp3"}
+	f := Fields{Fields: metadata.Fields{RJCode: "RJ1", Title: "a"}, Ext: "mp3"}
 	if got, want := tmpl.Dir(f), "RJ1"; got != want {
 		t.Errorf("Dir = %q, want %q", got, want)
 	}

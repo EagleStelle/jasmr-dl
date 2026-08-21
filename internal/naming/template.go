@@ -4,10 +4,13 @@ package naming
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
+	"github.com/EagleStelle/jasmr-dl/internal/metadata"
+	"github.com/EagleStelle/jasmr-dl/internal/tmpl"
 	"github.com/EagleStelle/jasmr-dl/internal/util"
 )
 
@@ -15,18 +18,12 @@ import (
 // the shape it describes rather than collapsing a level.
 const Unknown = "Unknown"
 
-// Fields carries every value a template can name. The album fields are known
-// before anything is fetched; the file fields settle only once a file is in
-// hand, which is why a directory may not name them.
+// Fields carries every value a template can name: the post's metadata, which is
+// the same vocabulary --parse-metadata is written in and is known before
+// anything is fetched, and the file fields, which settle only once a file is in
+// hand and so may not name a directory.
 type Fields struct {
-	Title  string
-	RJCode string
-	Circle string
-	Artist string
-	Date   string
-	Year   string
-	Month  string
-	Day    string
+	metadata.Fields
 
 	Chapter string
 	Ext     string
@@ -34,17 +31,6 @@ type Fields struct {
 	// Number is the file's place in the post, of Total files.
 	Number int
 	Total  int
-}
-
-var albumField = map[string]func(Fields) string{
-	"title":  func(f Fields) string { return f.Title },
-	"rjcode": func(f Fields) string { return f.RJCode },
-	"circle": func(f Fields) string { return f.Circle },
-	"artist": func(f Fields) string { return f.Artist },
-	"date":   func(f Fields) string { return f.Date },
-	"year":   func(f Fields) string { return f.Year },
-	"month":  func(f Fields) string { return f.Month },
-	"day":    func(f Fields) string { return f.Day },
 }
 
 var fileField = map[string]func(Fields) string{
@@ -62,12 +48,7 @@ type Template struct {
 }
 
 type segment struct {
-	nodes []node
-}
-
-type node struct {
-	lit   string
-	field string
+	nodes []tmpl.Node
 }
 
 // Parse reads a template. The last segment names the file, any before it name
@@ -109,58 +90,35 @@ func Parse(raw string) (*Template, error) {
 func checkExtension(file segment) error {
 	last := file.nodes[len(file.nodes)-1]
 	switch {
-	case last.field == "ext":
+	case last.Field == "ext":
 		return nil
-	case last.field == "" && util.IsAudioFile(last.lit):
+	case last.Field == "" && util.IsAudioFile(last.Lit):
 		return nil
 	}
 	return errors.New("output template must name a file ending in {ext} or an audio extension; " +
 		"a directory on its own belongs in -P")
 }
 
+// parseSegment reads one path segment. Every brace has to name a field: a
+// filename holding one of anything else is more likely a mistake than a wish.
 func parseSegment(raw string, allowFile bool) (segment, error) {
-	var seg segment
-	for {
-		open := strings.IndexByte(raw, '{')
-		if open < 0 {
-			break
+	nodes, err := tmpl.Parse(raw, func(name string) (string, error) {
+		if metadata.Readable(name) {
+			return name, nil
 		}
-		shut := strings.IndexByte(raw[open:], '}')
-		if shut < 0 {
-			return seg, fmt.Errorf("unclosed { in %q", raw)
+		if _, ok := fileField[name]; !ok {
+			return "", fmt.Errorf("unknown field {%s}; known fields are %s", name, knownFields())
 		}
-		shut += open
-
-		name := strings.ToLower(strings.TrimSpace(raw[open+1 : shut]))
-		if strings.ContainsRune(name, '{') {
-			return seg, fmt.Errorf("unclosed { in %q", raw)
+		if !allowFile {
+			return "", fmt.Errorf("{%s} names one file, so it cannot appear in a directory", name)
 		}
-		if err := checkField(name, allowFile); err != nil {
-			return seg, err
-		}
-		if open > 0 {
-			seg.nodes = append(seg.nodes, node{lit: raw[:open]})
-		}
-		seg.nodes = append(seg.nodes, node{field: name})
-		raw = raw[shut+1:]
-	}
-	if raw != "" {
-		seg.nodes = append(seg.nodes, node{lit: raw})
-	}
-	return seg, nil
+		return name, nil
+	})
+	return segment{nodes}, err
 }
 
-func checkField(name string, allowFile bool) error {
-	if _, ok := albumField[name]; ok {
-		return nil
-	}
-	if _, ok := fileField[name]; !ok {
-		return fmt.Errorf("unknown field {%s}; known fields are %s", name, knownFields())
-	}
-	if !allowFile {
-		return fmt.Errorf("{%s} names one file, so it cannot appear in a directory", name)
-	}
-	return nil
+func knownFields() string {
+	return tmpl.Known(append(metadata.ReadNames(), slices.Collect(maps.Keys(fileField))...))
 }
 
 // Dir is the directory the template puts a file in. A segment whose fields are
@@ -197,26 +155,16 @@ func (t *Template) expandDirs(f Fields) []string {
 // page content, so a separator inside one must never open a directory. Literal
 // text is the caller's own, and keeps whatever it says.
 func (s segment) expand(f Fields) string {
-	var b strings.Builder
-	for _, n := range s.nodes {
-		if n.field == "" {
-			b.WriteString(n.lit)
-			continue
+	return strings.TrimSpace(tmpl.Expand(s.nodes, func(name string) string {
+		v, ok := f.Read(name)
+		if !ok {
+			v = fileField[name](f)
 		}
-		v := value(n.field, f)
 		if v == "" {
 			v = Unknown
 		}
-		b.WriteString(util.Sanitize(v))
-	}
-	return strings.TrimSpace(b.String())
-}
-
-func value(name string, f Fields) string {
-	if fn, ok := albumField[name]; ok {
-		return fn(f)
-	}
-	return fileField[name](f)
+		return util.Sanitize(v)
+	}))
 }
 
 // join keeps a rooted template rooted, which filepath.Join alone would not do
@@ -239,19 +187,4 @@ func number(n, width int) string {
 // Width is the digit count of the largest index a post will number to.
 func Width(n int) int {
 	return len(fmt.Sprint(max(n, 1)))
-}
-
-func knownFields() string {
-	names := make([]string, 0, len(albumField)+len(fileField))
-	for name := range albumField {
-		names = append(names, name)
-	}
-	for name := range fileField {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for i, name := range names {
-		names[i] = "{" + name + "}"
-	}
-	return strings.Join(names, " ")
 }

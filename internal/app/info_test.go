@@ -43,11 +43,13 @@ func streamPlan(t *testing.T, dir string) *plan {
 	}
 
 	r := &run{cfg: Config{Log: func(string, ...any) {}}}
-	tags := r.tagsFor(album, album.Tracks[0], 1)
+	meta := metaFor(album)
+	tags := r.tagsFor(meta, album, album.Tracks[0], 1)
 	return &plan{
 		album:    album,
 		dir:      dir,
 		chapters: album.Chapters,
+		meta:     meta,
 		tags:     []downloader.Tags{tags},
 		lines:    linesFor(album),
 	}
@@ -136,13 +138,15 @@ func TestInfoForSeparateFiles(t *testing.T) {
 	}
 
 	r := &run{cfg: Config{Log: func(string, ...any) {}}}
+	meta := metaFor(album)
 	p := &plan{
 		album:    album,
 		dir:      dir,
 		chapters: r.chaptersFor(album),
+		meta:     meta,
 		tags: []downloader.Tags{
-			r.tagsFor(album, album.Tracks[0], 1),
-			r.tagsFor(album, album.Tracks[1], 2),
+			r.tagsFor(meta, album, album.Tracks[0], 1),
+			r.tagsFor(meta, album, album.Tracks[1], 2),
 		},
 	}
 

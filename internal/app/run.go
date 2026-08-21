@@ -12,6 +12,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/EagleStelle/jasmr-dl/internal/downloader"
+	"github.com/EagleStelle/jasmr-dl/internal/metadata"
 	"github.com/EagleStelle/jasmr-dl/internal/naming"
 	"github.com/EagleStelle/jasmr-dl/internal/scraper"
 )
@@ -33,6 +34,9 @@ type run struct {
 	cfg   Config
 	state *state
 
+	// rules rewrite a post's metadata on its way to being written, in order.
+	rules []metadata.Rule
+
 	// stderrMu keeps two posts from splitting a line between them.
 	stderrMu sync.Mutex
 }
@@ -45,7 +49,12 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 		return Summary{}, err
 	}
 
-	r := &run{cfg: cfg}
+	rules, err := metadata.ParseRules(cfg.ParseMetadata)
+	if err != nil {
+		return Summary{}, err
+	}
+
+	r := &run{cfg: cfg, rules: rules}
 	// Applying a record touches only what is already on disk, so nothing about
 	// the network is set up for it.
 	if cfg.LoadInfoJSON != "" {
@@ -99,6 +108,10 @@ type plan struct {
 	chapters []scraper.Chapter
 	split    bool
 	jobs     []downloader.Job
+
+	// meta is the post's metadata, every rule already applied, which every
+	// writer of the post reads.
+	meta metadata.Fields
 
 	// tags is the post's own metadata, one per job, whatever a job embeds. The
 	// record carries it even where nothing is written into the file.
@@ -161,7 +174,11 @@ func (r *run) planFor(ctx context.Context, target string) (*plan, error) {
 		return nil, err
 	}
 
-	fields := fieldsFor(album)
+	// The template names where a file goes from what the page said; the rules
+	// say what is written into it.
+	fields := naming.Fields{Fields: metaFor(album)}
+	meta := r.rewrite(fields.Fields)
+
 	dir := underBasePath(r.cfg.BasePath, tmpl.Dir(fields))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create output directory: %w", err)
@@ -172,7 +189,7 @@ func (r *run) planFor(ctx context.Context, target string) (*plan, error) {
 	for i, t := range album.Tracks {
 		f := fields
 		f.Number, f.Total = i+1, len(album.Tracks)
-		full := r.tagsFor(album, t, i+1)
+		full := r.tagsFor(meta, album, t, i+1)
 		tags = append(tags, full)
 		jobs = append(jobs, downloader.Job{
 			Name:       t.Title,
@@ -192,6 +209,7 @@ func (r *run) planFor(ctx context.Context, target string) (*plan, error) {
 		chapters: chapters,
 		split:    split,
 		jobs:     jobs,
+		meta:     meta,
 		tags:     tags,
 		lines:    linesFor(album),
 	}, nil

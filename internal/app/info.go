@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/EagleStelle/jasmr-dl/internal/downloader"
+	"github.com/EagleStelle/jasmr-dl/internal/metadata"
 	"github.com/EagleStelle/jasmr-dl/internal/scraper"
 	"github.com/EagleStelle/jasmr-dl/internal/util"
 )
@@ -38,6 +39,11 @@ type Info struct {
 	Artist string `json:"artist,omitempty"`
 	Date   string `json:"date,omitempty"`
 	Genre  string `json:"genre,omitempty"`
+
+	// Album is derived from the title and the RJ code, recorded because a rule
+	// may have named something else. A record carrying none is read back with
+	// the derived name.
+	Album string `json:"album,omitempty"`
 
 	// Tags is the post's tag list in page order.
 	Tags []string `json:"tags,omitempty"`
@@ -91,18 +97,18 @@ type InfoTrack struct {
 // infoFor gathers the post and what it came to on disk. results is in job
 // order, which is the order p.tags is in.
 func (r *run) infoFor(p *plan, pics downloader.Pictures, results []downloader.Result) Info {
-	album := p.album
 	info := Info{
 		Version:  infoVersion,
-		URL:      album.PageURL,
-		Title:    album.Title,
-		RJCode:   album.RJCode,
-		Circle:   album.Circle,
-		Artist:   album.Artists,
-		Date:     album.Date,
-		Genre:    genre,
-		Tags:     album.Tags,
-		Source:   sourceName(album.Source()),
+		URL:      p.album.PageURL,
+		Title:    p.meta.Title,
+		RJCode:   p.meta.RJCode,
+		Circle:   p.meta.Circle,
+		Artist:   p.meta.Artist,
+		Date:     p.meta.Date,
+		Genre:    p.meta.Genre,
+		Album:    p.meta.AlbumName(),
+		Tags:     p.album.Tags,
+		Source:   sourceName(p.album.Source()),
 		Cover:    under(p.dir, pics.Cover),
 		Chapters: infoChapters(p.chapters),
 	}
@@ -146,6 +152,28 @@ func (r *run) infoTrack(p *plan, tags downloader.Tags, f downloader.OutputFile) 
 		DiscTotal:   tags.DiscTotal,
 		Chapters:    infoChapters(chapters),
 	}
+}
+
+// meta reads a record back as the post metadata it was written from.
+func (i Info) meta() metadata.Fields {
+	return metadata.Fields{
+		Title:  i.Title,
+		RJCode: i.RJCode,
+		Circle: i.Circle,
+		Artist: i.Artist,
+		Date:   i.Date,
+		Genre:  i.Genre,
+		Album:  i.Album,
+	}
+}
+
+// trackMeta reads one track back as metadata, the post's RJ code behind it, so
+// a rule sees the fields it would see on a download.
+func trackMeta(info Info, t InfoTrack) metadata.Fields {
+	f := info.meta()
+	f.Title, f.Artist, f.Circle = t.Title, t.Artist, t.AlbumArtist
+	f.Album, f.Date, f.Genre = t.Album, t.Date, t.Genre
+	return f
 }
 
 // tags is the metadata to write into the file this track names.

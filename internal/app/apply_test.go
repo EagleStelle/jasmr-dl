@@ -122,6 +122,41 @@ func probe(t *testing.T, ffprobe string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// A record already holds one set of metadata per file, so a rule applying to it
+// runs over each track rather than over the post.
+func TestApplyRunsTheRulesOverEachTrack(t *testing.T) {
+	r := ruled(t, "{title}:{artist} - {title}")
+	info := Info{URL: "https://japaneseasmr.com/12345/", RJCode: "RJ123456"}
+	track := InfoTrack{
+		File:    "RJ123456.m4a",
+		Title:   "CV.鈴木 - ある夏の日",
+		Genre:   genre,
+		Comment: "URL: " + info.URL,
+	}
+
+	tags := r.trackTags(info, track)
+	if tags.Title != "ある夏の日" || tags.Artist != "CV.鈴木" {
+		t.Errorf("title = %q, artist = %q, want the title read apart", tags.Title, tags.Artist)
+	}
+	// The RJ code comes off the post, the track carrying none of its own.
+	if got, want := tags.Album, "ある夏の日 [RJ123456]"; got != want {
+		t.Errorf("album = %q, want %q", got, want)
+	}
+	if tags.Comment != track.Comment {
+		t.Errorf("comment = %q, want the record's own %q", tags.Comment, track.Comment)
+	}
+}
+
+// A run naming no rule writes the record back exactly as it stands.
+func TestApplyLeavesARecordAloneWithoutARule(t *testing.T) {
+	r := &run{cfg: Config{Log: func(string, ...any) {}}}
+	track := InfoTrack{File: "RJ123456.m4a", Title: "CV.鈴木 - ある夏の日", Album: "RJ123456"}
+
+	if got := r.trackTags(Info{}, track); got != track.tags() {
+		t.Errorf("tags = %+v, want the record's own %+v", got, track.tags())
+	}
+}
+
 // A record written by one run has to write back into the files a later one
 // finds beside it, without anything being fetched.
 func TestApplyWritesTheRecordIntoTheFile(t *testing.T) {

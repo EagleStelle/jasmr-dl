@@ -32,7 +32,7 @@ func (r *run) applyInfo(ctx context.Context) (Summary, error) {
 	for _, t := range info.Tracks {
 		res := downloader.Result{Job: downloader.Job{Name: t.File}}
 		file := beside(dir, t.File)
-		if err := r.applyTrack(ctx, d, t, file); err != nil {
+		if err := r.applyTrack(ctx, d, info, t, file); err != nil {
 			res.Err = err
 		} else {
 			res.Files = []downloader.OutputFile{{Path: file, Chapter: -1}}
@@ -57,7 +57,7 @@ func (r *run) coverFrom(info Info, dir string) string {
 }
 
 // applyTrack rewrites one file.
-func (r *run) applyTrack(ctx context.Context, d *downloader.Downloader, t InfoTrack, file string) error {
+func (r *run) applyTrack(ctx context.Context, d *downloader.Downloader, info Info, t InfoTrack, file string) error {
 	if !exists(file) {
 		return errors.New("not on disk")
 	}
@@ -67,7 +67,7 @@ func (r *run) applyTrack(ctx context.Context, d *downloader.Downloader, t InfoTr
 		chapters []scraper.Chapter
 	)
 	if r.cfg.EmbedMetadata {
-		tags = t.tags()
+		tags = r.trackTags(info, t)
 	}
 	if r.cfg.EmbedChapters {
 		chapters = chaptersFrom(t.Chapters)
@@ -78,6 +78,18 @@ func (r *run) applyTrack(ctx context.Context, d *downloader.Downloader, t InfoTr
 
 	r.debugf("applying to %s", file)
 	return d.Retag(ctx, tags, chapters, file)
+}
+
+// trackTags is what goes into one file: the metadata the record holds, with
+// every rule applied over it. A record is already written, so the rules run
+// per track here rather than per post; the fields they read are the same ones.
+func (r *run) trackTags(info Info, t InfoTrack) downloader.Tags {
+	tags := t.tags()
+	if len(r.rules) == 0 {
+		return tags
+	}
+
+	return withMeta(tags, r.rewrite(trackMeta(info, t)))
 }
 
 // summarizeApply reports what was written, failing only where nothing was.

@@ -2,7 +2,10 @@ package naming
 
 import (
 	"fmt"
+	"slices"
 	"strings"
+
+	"github.com/EagleStelle/jasmr-dl/internal/tmpl"
 )
 
 // Default puts every post under its RJ code, with a leaf per shape.
@@ -218,31 +221,7 @@ func filenameBounds(raw string) (start, end int) {
 func isSep(c byte) bool { return c == '/' || c == '\\' }
 
 func namesNumber(file string) bool {
-	for _, name := range fieldNames(file) {
-		if name == "number" {
-			return true
-		}
-	}
-	return false
-}
-
-// fieldNames lists the fields a segment names, spelled as checkField spells
-// them. An unclosed brace is left for Parse to report.
-func fieldNames(s string) []string {
-	var names []string
-	for {
-		open := strings.IndexByte(s, '{')
-		if open < 0 {
-			return names
-		}
-		shut := strings.IndexByte(s[open:], '}')
-		if shut < 0 {
-			return names
-		}
-		shut += open
-		names = append(names, strings.ToLower(strings.TrimSpace(s[open+1:shut])))
-		s = s[shut+1:]
-	}
+	return slices.Contains(tmpl.Scan(file), "number")
 }
 
 // extensionAt is where the extension starts. A template ending in {ext} may
@@ -267,7 +246,7 @@ func extensionAt(file string) int {
 	if dot >= 0 {
 		return dot
 	}
-	if names := fieldNames(file); len(names) > 0 && names[len(names)-1] == "ext" && field >= 0 {
+	if names := tmpl.Scan(file); len(names) > 0 && names[len(names)-1] == "ext" && field >= 0 {
 		return field
 	}
 	return len(file)

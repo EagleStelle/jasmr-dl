@@ -60,6 +60,7 @@ func config(cmd *cobra.Command, opts *options, targets []string) (app.Config, er
 
 	cfg := app.Config{
 		Targets:       targets,
+		ParseMetadata: opts.parseMetadata,
 		BasePath:      opts.basePath,
 		Concurrency:   opts.concurrency,
 		Connections:   opts.connections,

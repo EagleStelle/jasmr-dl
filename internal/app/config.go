@@ -8,6 +8,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/EagleStelle/jasmr-dl/internal/metadata"
 	"github.com/EagleStelle/jasmr-dl/internal/session"
 )
 
@@ -48,6 +49,11 @@ type Config struct {
 
 	// BasePath is the directory a relative template is written under.
 	BasePath string
+
+	// ParseMetadata rewrites what a post says about itself before any of it is
+	// written, each entry reading FROM:TO. It never moves a file: the output
+	// template names those.
+	ParseMetadata []string
 
 	// Concurrency is posts, and files within them, at once. Zero is the default.
 	Concurrency int
@@ -184,5 +190,7 @@ func (c Config) validate() error {
 			}
 		}
 	}
-	return nil
+
+	_, err := metadata.ParseRules(c.ParseMetadata)
+	return err
 }

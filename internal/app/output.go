@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/EagleStelle/jasmr-dl/internal/downloader"
+	"github.com/EagleStelle/jasmr-dl/internal/metadata"
 	"github.com/EagleStelle/jasmr-dl/internal/naming"
 	"github.com/EagleStelle/jasmr-dl/internal/scraper"
 )
@@ -74,28 +75,17 @@ func templateFor(given string, split bool, files int) (*naming.Template, error) 
 	return naming.Parse(chosen)
 }
 
-// fieldsFor is the album half of the output template.
-func fieldsFor(album *scraper.Album) naming.Fields {
-	year, month, day := splitDate(album.Date)
-	return naming.Fields{
+// metaFor is what the page said about the post. It is what the output template
+// reads, and what the rules rewrite on the way to being written.
+func metaFor(album *scraper.Album) metadata.Fields {
+	return metadata.Fields{
 		Title:  album.Title,
 		RJCode: album.RJCode,
 		Circle: album.Circle,
 		Artist: album.Artists,
 		Date:   album.Date,
-		Year:   year,
-		Month:  month,
-		Day:    day,
+		Genre:  genre,
 	}
-}
-
-// splitDate breaks the scraper's ISO date apart.
-func splitDate(date string) (year, month, day string) {
-	parts := strings.Split(date, "-")
-	if len(parts) != 3 {
-		return "", "", ""
-	}
-	return parts[0], parts[1], parts[2]
 }
 
 // splitting reports whether the run cuts a stream on its chapters. Only a
@@ -135,21 +125,50 @@ func (r *run) embedTags(tags downloader.Tags) downloader.Tags {
 	return tags
 }
 
-// tagsFor builds the metadata for one file, n being its place in the post.
-func (r *run) tagsFor(album *scraper.Album, track scraper.Track, n int) downloader.Tags {
-	return downloader.Tags{
-		Title:       titleFor(album, track),
-		Artist:      album.Artists,
-		AlbumArtist: album.Circle,
-		Album:       albumFor(album.Title, album.RJCode),
-		Date:        album.Date,
-		Genre:       genre,
-		Comment:     commentFor(album.PageURL, album.Tags),
-		Track:       n,
-		TrackTotal:  len(album.Tracks),
-		Disc:        1,
-		DiscTotal:   1,
+// rewrite applies the run's rules in turn, giving back the metadata to write.
+// A rule matching nothing is not an error: it was written for the posts it
+// fits, and says so in the debug log.
+func (r *run) rewrite(f metadata.Fields) metadata.Fields {
+	for _, rule := range r.rules {
+		next, ok := rule.Apply(f)
+		if !ok {
+			r.debugf("parse-metadata %s matched nothing", rule)
+			continue
+		}
+		r.debugf("parse-metadata %s matched", rule)
+		f = next
 	}
+	return f
+}
+
+// tagsFor builds the metadata for one file, n being its place in the post.
+func (r *run) tagsFor(meta metadata.Fields, album *scraper.Album, track scraper.Track, n int) downloader.Tags {
+	tags := withMeta(downloader.Tags{
+		Comment:    commentFor(album.PageURL, album.Tags),
+		Track:      n,
+		TrackTotal: len(album.Tracks),
+		Disc:       1,
+		DiscTotal:  1,
+	}, meta)
+
+	// The album is named for the post, so a track's own name goes on after it.
+	tags.Title = titleFor(tags.Title, album, track)
+	return tags
+}
+
+// withMeta writes the post's metadata into tags, leaving the counters and the
+// comment beside them as they were.
+func withMeta(tags downloader.Tags, f metadata.Fields) downloader.Tags {
+	tags.Title, tags.Artist, tags.AlbumArtist = f.Title, f.Artist, f.Circle
+	tags.Album, tags.Date, tags.Genre = f.AlbumName(), f.Date, f.Genre
+	return tags
+}
+
+func titleFor(title string, album *scraper.Album, track scraper.Track) string {
+	if len(album.Tracks) < 2 || track.Name == "" {
+		return title
+	}
+	return title + " - " + track.Name
 }
 
 // commentFor packs what no tag of its own carries into the comment field, one
@@ -160,26 +179,6 @@ func commentFor(url string, tags []string) string {
 		lines = append(lines, "Tags: "+strings.Join(tags, ", "))
 	}
 	return strings.Join(lines, "\n")
-}
-
-// albumFor names the work the same way wherever it is written: the post's
-// title with its DLsite code after it. Either half stands alone where the post
-// carries only the one.
-func albumFor(title, rjCode string) string {
-	switch {
-	case title == "":
-		return rjCode
-	case rjCode == "":
-		return title
-	}
-	return title + " [" + rjCode + "]"
-}
-
-func titleFor(album *scraper.Album, track scraper.Track) string {
-	if len(album.Tracks) < 2 || track.Name == "" {
-		return album.Title
-	}
-	return album.Title + " - " + track.Name
 }
 
 // pictureURLs splits a post's pictures into the cover and the gallery behind

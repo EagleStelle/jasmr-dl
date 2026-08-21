@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -68,6 +69,18 @@ func TestFlagsReachTheRun(t *testing.T) {
 	}
 	if !cfg.EmbedMetadata || !cfg.EmbedCover || !cfg.EmbedChapters || !cfg.SplitChapters {
 		t.Errorf("the embed flags did not reach the run: %+v", cfg)
+	}
+}
+
+// --parse-metadata is repeatable, and the rules reach the run in order.
+func TestParseMetadataRulesReachTheRunInOrder(t *testing.T) {
+	cfg := runConfig(t, []string{"https://japaneseasmr.com/12345/"},
+		"--parse-metadata", "{title}:{artist} - {title}",
+		"--parse-metadata", `{title}:^\d+\. (?P<title>.+)$`)
+
+	want := []string{"{title}:{artist} - {title}", `{title}:^\d+\. (?P<title>.+)$`}
+	if !slices.Equal(cfg.ParseMetadata, want) {
+		t.Errorf("rules = %q, want %q", cfg.ParseMetadata, want)
 	}
 }
 
