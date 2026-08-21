@@ -18,6 +18,9 @@ import (
 // chromeHello is the handshake to imitate. Cloudflare fingerprints the
 // ClientHello, and Go's offers a cipher and extension set no browser sends, so
 // a spoofed User-Agent alone contradicts it.
+//
+// This resolves to the newest Chrome utls carries, not the newest Chrome;
+// util.HandshakeMajor keeps the User-Agent from claiming otherwise.
 var chromeHello = utls.HelloChrome_Auto
 
 // browserTransport sends every request behind chromeHello.

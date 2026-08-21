@@ -3,6 +3,7 @@ package util
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"sync"
 )
 
@@ -11,19 +12,21 @@ import (
 const chromeUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
 	"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/%s.0.0.0 Safari/537.36"
 
-// fallbackMajor is used when no installed browser version can be read.
-const fallbackMajor = "151"
+// HandshakeMajor is the Chrome major version internal/downloader's TLS
+// handshake imitates. TestUserAgentMatchesHandshake keeps it honest.
+const HandshakeMajor = 133
 
 var chromeVersion = regexp.MustCompile(`Chrome/(\d+)`)
 
-// UserAgent is the fallback User-Agent, read from the browser installed on this
-// machine. A run carries its own, and a clearance brings the one it was earned
-// under; either wins over this.
+// UserAgent is the fallback User-Agent, never claiming a Chrome newer than the
+// handshake sends. A run carries its own, and a clearance brings the one it was
+// earned under; either wins over this.
 var UserAgent = sync.OnceValue(func() string {
-	if ua := detectUserAgent(); ua != "" {
+	ua := detectUserAgent()
+	if v, err := strconv.Atoi(ChromeMajorVersion(ua)); err == nil && v <= HandshakeMajor {
 		return ua
 	}
-	return chromeUAFor(fallbackMajor)
+	return chromeUAFor(strconv.Itoa(HandshakeMajor))
 })
 
 func chromeUAFor(major string) string {

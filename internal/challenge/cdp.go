@@ -146,8 +146,8 @@ func (w *endpointWatcher) Write(p []byte) (int, error) {
 // conn is a Chrome DevTools Protocol connection: JSON over a WebSocket, each
 // command answered by the message carrying its id.
 //
-// Only browser-level commands are used, so nothing attaches to a page and the
-// Runtime domain, which a challenge watches for, is never enabled.
+// Nothing attaches to a page until the challenge has passed: the Runtime domain
+// is one of the things a challenge watches for.
 type conn struct {
 	ws  *websocket.Conn
 	wmu sync.Mutex // one writer at a time on the socket
@@ -159,9 +159,10 @@ type conn struct {
 }
 
 type command struct {
-	ID     int    `json:"id"`
-	Method string `json:"method"`
-	Params any    `json:"params,omitempty"`
+	ID        int    `json:"id"`
+	SessionID string `json:"sessionId,omitempty"`
+	Method    string `json:"method"`
+	Params    any    `json:"params,omitempty"`
 }
 
 type reply struct {
@@ -196,8 +197,14 @@ func dial(wsURL string) (*conn, error) {
 
 func (c *conn) Close() error { return c.ws.Close() }
 
-// call sends one command and unmarshals its result into out, which may be nil.
+// call sends one browser-level command and unmarshals its result into out,
+// which may be nil.
 func (c *conn) call(ctx context.Context, method string, params, out any) error {
+	return c.callOn(ctx, "", method, params, out)
+}
+
+// callOn is call, addressed to one attached target.
+func (c *conn) callOn(ctx context.Context, sessionID, method string, params, out any) error {
 	c.mu.Lock()
 	if c.closed != nil {
 		err := c.closed
@@ -211,7 +218,7 @@ func (c *conn) call(ctx context.Context, method string, params, out any) error {
 	c.mu.Unlock()
 
 	c.wmu.Lock()
-	err := websocket.JSON.Send(c.ws, command{ID: id, Method: method, Params: params})
+	err := websocket.JSON.Send(c.ws, command{ID: id, SessionID: sessionID, Method: method, Params: params})
 	c.wmu.Unlock()
 	if err != nil {
 		c.forget(id)

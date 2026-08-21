@@ -111,12 +111,18 @@ func (r *run) fetchAlbum(ctx context.Context, target string) (*scraper.Album, er
 	}
 
 	r.warnf("[warn] Cloudflare is challenging this request, opening a browser to clear it")
-	if err := r.solveChallenge(ctx, target); err != nil {
+	html, err := r.solveChallenge(ctx, target)
+	if err != nil {
 		return nil, fmt.Errorf("clear the challenge: %w\n%s", err, manualClearance)
 	}
 
-	// A second refusal is not worth a third browser: what the site objects to is
-	// something no cookie fixes, the IP most likely.
+	// The browser read the page as the client Cloudflare cleared, so nothing has
+	// to pass for it twice.
+	if html != "" {
+		return scraper.Parse(target, html)
+	}
+
+	// It could not, so the cookies get their one try.
 	client, userAgent = r.state.transport()
 	album, err = scraper.New(client, userAgent).Album(ctx, target)
 	if errors.Is(err, util.ErrChallenge) {
@@ -125,8 +131,9 @@ func (r *run) fetchAlbum(ctx context.Context, target string) (*scraper.Album, er
 	return album, err
 }
 
-// solveChallenge clears the challenge and moves the run onto what it earned.
-func (r *run) solveChallenge(ctx context.Context, target string) error {
+// solveChallenge clears the challenge, moves the run onto what it earned, and
+// returns the cleared page where the browser could read one.
+func (r *run) solveChallenge(ctx context.Context, target string) (string, error) {
 	c := r.cfg.Challenge
 	res, err := challenge.Solve(ctx, target, challenge.Options{
 		BrowserPath: c.BrowserPath,
@@ -137,27 +144,27 @@ func (r *run) solveChallenge(ctx context.Context, target string) error {
 		Log:         r.debugf,
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	earned := &session.Clearance{Cookies: res.Cookies, UserAgent: res.UserAgent}
 	r.state.userAgent = earned.UserAgent
 	if err := r.state.use(earned.Cookies); err != nil {
-		return err
+		return "", err
 	}
 	r.debugf("cleared, holding %s", plural(len(earned.Cookies), "cookie"))
 
 	// Whatever the run was handed is now stale.
 	r.state.pending = nil
 	if r.cfg.Store == nil {
-		return nil
+		return res.HTML, nil
 	}
 	if err := r.cfg.Store.Save(ctx, r.cfg.StoreKey, earned); err != nil {
 		r.warnf("[warn] clearance not saved for next time: %v", err)
-		return nil
+		return res.HTML, nil
 	}
 	r.infof("[info] clearance saved under %q", r.cfg.StoreKey)
-	return nil
+	return res.HTML, nil
 }
 
 func clearanceCookies(c *session.Clearance) []downloader.Cookie {

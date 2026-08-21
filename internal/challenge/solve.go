@@ -66,9 +66,14 @@ func (o Options) logf(format string, args ...any) {
 type Result struct {
 	Cookies   []downloader.Cookie
 	UserAgent string
+
+	// HTML is the cleared page as the browser read it, empty where it could not
+	// be read.
+	HTML string
 }
 
-// Solve opens pageURL in a real browser and waits for Cloudflare to clear it.
+// Solve opens pageURL in a real browser, waits for Cloudflare to clear it, and
+// reads the page the browser lands on.
 //
 // The cookies and the User-Agent come back together because they only work
 // together: cf_clearance is bound to the User-Agent that earned it.
@@ -112,25 +117,33 @@ func Solve(ctx context.Context, pageURL string, o Options) (*Result, error) {
 	defer b.Close()
 
 	// The challenge gets its own clock, now there is a browser to give it.
-	ctx, cancel = context.WithTimeout(ctx, timeout)
+	solving, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	var target struct {
 		TargetID string `json:"targetId"`
 	}
 	// Creating a target navigates it, so this is the whole of the page handling.
-	if err := b.conn.call(ctx, "Target.createTarget", map[string]any{"url": pageURL}, &target); err != nil {
+	if err := b.conn.call(solving, "Target.createTarget", map[string]any{"url": pageURL}, &target); err != nil {
 		return nil, err
 	}
 	o.logf("opened %s, waiting up to %s for %s", pageURL, timeout, clearanceCookie)
 
-	cookies, err := waitForClearance(ctx, b, host, timeout)
+	cookies, err := waitForClearance(solving, b, host, timeout)
 	if err != nil {
 		return nil, err
 	}
+
+	// A solve that earned cookies and no page is still worth handing back.
+	html, err := readPage(ctx, b, target.TargetID, pageURL)
+	if err != nil {
+		o.logf("page not read from the browser: %v", err)
+	} else {
+		o.logf("read %d bytes of the cleared page", len(html))
+	}
 	_ = b.conn.call(ctx, "Target.closeTarget", map[string]any{"targetId": target.TargetID}, nil)
 
-	return &Result{Cookies: cookies, UserAgent: userAgent}, nil
+	return &Result{Cookies: cookies, UserAgent: userAgent, HTML: html}, nil
 }
 
 // probeUserAgent asks the browser its name, with the headless marker taken out.

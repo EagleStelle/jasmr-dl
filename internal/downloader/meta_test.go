@@ -12,7 +12,7 @@ import (
 func TestWriteChapterMeta(t *testing.T) {
 	path := t.TempDir() + "/m.ffmeta"
 	chapters := []scraper.Chapter{
-		{Start: 0, Title: "トラック1：リアス部長の花嫁修行！？_wav"},
+		{Start: 0, Title: "トラック1：朝の声_wav"},
 		{Start: 323 * time.Second, Title: "semi;colon=equals#hash"},
 		{Start: 1260 * time.Second, Title: "last"},
 	}
@@ -33,7 +33,7 @@ func TestWriteChapterMeta(t *testing.T) {
 		"START=323000\nEND=1260000",
 		"START=1260000\nEND=2000000",
 		// Numbered, the same form a split gives each file.
-		"title=1_トラック1：リアス部長の花嫁修行！？_wav",
+		"title=1_トラック1：朝の声_wav",
 		`title=2_semi\;colon\=equals\#hash`,
 		"title=3_last",
 	} {

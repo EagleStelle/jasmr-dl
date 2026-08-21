@@ -106,7 +106,7 @@ func TestNothingToTagSurvivesTheCounters(t *testing.T) {
 // A piece is titled for its chapter, plainly: the track number beside it
 // already carries the order, unlike the filename or an embedded chapter label.
 func TestPieceTagsTitleIsTheChapter(t *testing.T) {
-	base := Tags{Title: "ある夏の日", Album: "RJ1", Track: 1, TrackTotal: 1, Disc: 1, DiscTotal: 1}
+	base := Tags{Title: "ある夏の日", Album: "RJ123456", Track: 1, TrackTotal: 1, Disc: 1, DiscTotal: 1}
 	got := PieceTags(base, "耳かき", 3, 12)
 
 	if got.Title != "耳かき" {

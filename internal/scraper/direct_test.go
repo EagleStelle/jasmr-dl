@@ -8,7 +8,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 )
 
-const postURL = "https://japaneseasmr.com/25385/"
+const postURL = "https://japaneseasmr.com/12345/"
 
 func parse(t *testing.T, html string) (*goquery.Document, *url.URL) {
 	t.Helper()
@@ -27,20 +27,20 @@ func parse(t *testing.T, html string) (*goquery.Document, *url.URL) {
 // in the plain audio list below the gallery.
 const twoPlayerPage = `
 <video title="Track 1" poster="https://pic.example/x.jpg">
-  <source src="https://v.example.xyz/RJ282759.mp3" type="audio/mpeg"/>
-  <source src="https://v.example.xyz/RJ282759.m4a" type="audio/mp4"/>
+  <source src="https://v.example.xyz/RJ123456.mp3" type="audio/mpeg"/>
+  <source src="https://v.example.xyz/RJ123456.m4a" type="audio/mp4"/>
 </video>
 <video title="Track 2" poster="https://pic.example/x.jpg">
-  <source src="https://v.example.xyz/RJ282759 2.mp3" type="audio/mpeg"/>
-  <source src="https://v.example.xyz/RJ282759 2.m4a" type="audio/mp4"/>
+  <source src="https://v.example.xyz/RJ123456 2.mp3" type="audio/mpeg"/>
+  <source src="https://v.example.xyz/RJ123456 2.m4a" type="audio/mp4"/>
 </video>
 <audio controls preload="metadata">
-  <source src="https://v.example.xyz/RJ282759.mp3" type="audio/mpeg">
-  <source src="https://v.example.xyz/RJ282759.m4a" type="audio/mp4">
+  <source src="https://v.example.xyz/RJ123456.mp3" type="audio/mpeg">
+  <source src="https://v.example.xyz/RJ123456.m4a" type="audio/mp4">
 </audio>
 <audio controls preload="metadata">
-  <source src="https://v.example.xyz/RJ282759 2.mp3" type="audio/mpeg"/>
-  <source src="https://v.example.xyz/RJ282759 2.m4a" type="audio/mp4"/>
+  <source src="https://v.example.xyz/RJ123456 2.mp3" type="audio/mpeg"/>
+  <source src="https://v.example.xyz/RJ123456 2.m4a" type="audio/mp4"/>
 </audio>`
 
 func TestDirectTracksDedupesPlayersAndKeepsAlternates(t *testing.T) {
@@ -52,8 +52,8 @@ func TestDirectTracksDedupesPlayersAndKeepsAlternates(t *testing.T) {
 	}
 
 	for i, want := range []string{
-		"https://v.example.xyz/RJ282759.mp3",
-		"https://v.example.xyz/RJ282759%202.mp3",
+		"https://v.example.xyz/RJ123456.mp3",
+		"https://v.example.xyz/RJ123456%202.mp3",
 	} {
 		if tracks[i].LinkURL != want {
 			t.Errorf("track %d LinkURL = %q, want %q", i, tracks[i].LinkURL, want)
@@ -68,7 +68,7 @@ func TestDirectTracksDedupesPlayersAndKeepsAlternates(t *testing.T) {
 		}
 	}
 
-	if tracks[0].Title != "RJ282759.mp3" {
+	if tracks[0].Title != "RJ123456.mp3" {
 		t.Errorf("title = %q, want the host's own RJ name", tracks[0].Title)
 	}
 	for i, want := range []string{"Track 1", "Track 2"} {
@@ -92,8 +92,8 @@ func TestDirectTracksSinglePlayer(t *testing.T) {
 
 func TestDirectTracksFallsToPlaylistOnly(t *testing.T) {
 	doc, base := parse(t, `
-		<video title="RJ01632730"><source src="https://v.example.xyz/RJ01632730.m3u8"/></video>
-		<audio src="https://v.example.xyz/RJ01632730.m3u8"></audio>`)
+		<video title="RJ01234567"><source src="https://v.example.xyz/RJ01234567.m3u8"/></video>
+		<audio src="https://v.example.xyz/RJ01234567.m3u8"></audio>`)
 	tracks := directTracks(doc, base)
 
 	if len(tracks) != 1 {
@@ -103,7 +103,7 @@ func TestDirectTracksFallsToPlaylistOnly(t *testing.T) {
 		t.Errorf("Source = %v, want SourceHLS", tracks[0].Source)
 	}
 	// The remux picks the container, so the name carries no extension.
-	if tracks[0].Title != "RJ01632730" {
+	if tracks[0].Title != "RJ01234567" {
 		t.Errorf("title = %q, want the playlist stem", tracks[0].Title)
 	}
 	// The player's label is the RJ code the file already carries.

@@ -29,6 +29,8 @@ go.work.sum
 *.part
 *.part.*
 *.ts
+*.json
+*.nfo
 
 # Credentials
 cookies.txt

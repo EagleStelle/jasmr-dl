@@ -30,7 +30,19 @@ func (s *Scraper) Album(ctx context.Context, pageURL string) (*Album, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetch album page: %w", err)
 	}
+	return albumFrom(pageURL, doc)
+}
 
+// Parse reads a post page already in hand, for one a browser fetched.
+func Parse(pageURL, html string) (*Album, error) {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return nil, fmt.Errorf("parse album page: %w", err)
+	}
+	return albumFrom(pageURL, doc)
+}
+
+func albumFrom(pageURL string, doc *goquery.Document) (*Album, error) {
 	base, err := url.Parse(pageURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse page URL: %w", err)
